@@ -1,7 +1,6 @@
 const std = @import("std");
+const Uxn = @import("uxn.zig").Uxn;
 const Io = std.Io;
-
-const zuxn = @import("zuxn");
 
 pub fn main(init: std.process.Init) !void {
     // Prints to stderr, unbuffered, ignoring potential errors.
@@ -26,9 +25,12 @@ pub fn main(init: std.process.Init) !void {
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout_writer = &stdout_file_writer.interface;
 
-    try zuxn.printAnotherMessage(stdout_writer);
-
     try stdout_writer.flush(); // Don't forget to flush!
+
+    var uxn = Uxn.init();
+
+    const result = uxn.run();
+    std.process.exit(result);
 }
 
 test "simple test" {
