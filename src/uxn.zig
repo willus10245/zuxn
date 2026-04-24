@@ -74,7 +74,7 @@ pub const StackView = struct {
     pub fn pop(self: *StackView, comptime T: type) T {
         if (self.keep) {
             const val = self.stack.peek(T);
-            self.pop_offset += @sizeOf(T);
+            self.pop_offset +%= @sizeOf(T);
             return val;
         } else {
             return self.stack.pop(T);
@@ -88,6 +88,9 @@ pub const Uxn = struct {
     wst: Stack = Stack{},
     rst: Stack = Stack{},
     pc: u16 = 0x0100,
+
+    intercept_ctx: *anyopaque = undefined,
+    intercept_fn: ?*const fn (ctx: *anyopaque, uxn: *Uxn, port: u8, is_ouput: bool) void = null,
 
     op_sv: StackView = .{ .stack = undefined },
     sec_sv: StackView = .{ .stack = undefined },
@@ -171,13 +174,18 @@ pub const Uxn = struct {
         return false;
     }
 
+    pub fn runVector(self: *Uxn, pc: u16) void {
+        self.pc = pc;
+        _ = self.run();
+    }
+
     pub fn run(self: *Uxn) u1 {
         if (self.pc == 0x00 or self.dev[0x0f] != 0x00) return 0;
 
         while (self.mem[self.pc] != 0x00) {
             const instr = self.mem[self.pc];
-            self.dumpStacks();
-            logger.debug("PC {x:0>4}: executing {x:0>4}", .{ self.pc, instr });
+            // self.dumpStacks();
+            // logger.debug("PC {x:0>4}: executing {x:0>4}", .{ self.pc, instr });
             self.pc +%= 1;
 
             // decode modes
@@ -232,7 +240,7 @@ pub const Uxn = struct {
         return self.load(T, "mem", addr);
     }
 
-    fn loadDevice(self: *Uxn, comptime T: type, addr: u8) T {
+    pub fn loadDevice(self: *Uxn, comptime T: type, addr: u8) T {
         return self.load(T, "dev", addr);
     }
 
@@ -244,7 +252,7 @@ pub const Uxn = struct {
         self.store(T, "mem", addr, val);
     }
 
-    fn storeDevice(self: *Uxn, comptime T: type, addr: u8, val: T) void {
+    pub fn storeDevice(self: *Uxn, comptime T: type, addr: u8, val: T) void {
         self.store(T, "dev", addr, val);
     }
 
@@ -438,19 +446,23 @@ pub const Uxn = struct {
     }
 
     fn op_dei(self: *Uxn, comptime T: type) void {
-        _ = self;
-        _ = T;
-        unreachable;
-        // const dev_addr = self.op_sv.pop(u8);
-        // const val = self.loadDevice(T, dev_addr);
-        // self.op_sv.push(T, val);
+        const dev_addr = self.op_sv.pop(u8);
+        if (self.intercept_fn) |f| {
+            f(self.intercept_ctx, self, dev_addr, false);
+        }
+        const val = self.loadDevice(T, dev_addr);
+        self.op_sv.push(T, val);
     }
 
     fn op_deo(self: *Uxn, comptime T: type) void {
         const dev_addr = self.op_sv.pop(u8);
         const val = self.op_sv.pop(T);
-        std.debug.print("DEO port={X} value={X}\n", .{ dev_addr, val });
-        // self.storeDevice(T, dev_addr, val);
+        self.storeDevice(T, dev_addr, val);
+        if (dev_addr == 0x18 or dev_addr == 0x19) {
+            if (self.intercept_fn) |f| {
+                f(self.intercept_ctx, self, dev_addr, true);
+            }
+        }
     }
 
     fn op_add(self: *Uxn, comptime T: type) void {
