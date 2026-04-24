@@ -18,6 +18,11 @@ pub fn main(init: std.process.Init) !void {
     // In order to do I/O operations need an `Io` instance.
     const io = init.io;
 
+    var uxn = Uxn.init();
+
+    const rom_path = args[1];
+    _ = try std.Io.Dir.cwd().readFile(io, rom_path, uxn.mem[uxn.pc..]);
+
     // Stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
     // stdout, not any debugging messages.
@@ -26,8 +31,6 @@ pub fn main(init: std.process.Init) !void {
     const stdout_writer = &stdout_file_writer.interface;
 
     try stdout_writer.flush(); // Don't forget to flush!
-
-    var uxn = Uxn.init();
 
     const result = uxn.run();
     std.process.exit(result);

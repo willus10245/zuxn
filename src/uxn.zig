@@ -456,19 +456,19 @@ pub const Uxn = struct {
     fn op_add(self: *Uxn, comptime T: type) void {
         const b = self.op_sv.pop(T);
         const a = self.op_sv.pop(T);
-        self.op_sv.push(T, a + b);
+        self.op_sv.push(T, a +% b);
     }
 
     fn op_sub(self: *Uxn, comptime T: type) void {
         const b = self.op_sv.pop(T);
         const a = self.op_sv.pop(T);
-        self.op_sv.push(T, a - b);
+        self.op_sv.push(T, a -% b);
     }
 
     fn op_mul(self: *Uxn, comptime T: type) void {
         const b = self.op_sv.pop(T);
         const a = self.op_sv.pop(T);
-        self.op_sv.push(T, a * b);
+        self.op_sv.push(T, a *% b);
     }
 
     fn op_div(self: *Uxn, comptime T: type) void {
