@@ -52,11 +52,15 @@ pub fn main(init: std.process.Init) !void {
 
     varv.console_device.readArguments(&uxn, rom_args);
 
-    while (uxn.dev[0x0f] == 0x00) {
+    if (varv.system_device.exit_code) |c| {
+        std.process.exit(c);
+    }
+
+    while (varv.system_device.exit_code == null) {
         const byte = stdin.takeByte() catch unreachable;
 
         varv.console_device.readStdinByte(&uxn, byte);
     }
 
-    std.process.exit(uxn.dev[0x0f] & 0x1f);
+    std.process.exit(varv.system_device.exit_code orelse 0);
 }

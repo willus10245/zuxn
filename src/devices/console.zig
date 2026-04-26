@@ -15,7 +15,6 @@ pub const Console = struct {
 
     pub fn intercept(self: *Console, cpu: *Cpu, port: u8, is_output: bool) void {
         if (is_output) {
-            // std.debug.print("intercept port: {x}\n", .{port});
             switch (port) {
                 wrt_port, err_port => {
                     const byte = cpu.loadDevice(u8, port);
@@ -26,7 +25,7 @@ pub const Console = struct {
                         _ = self.stderr.writeByte(byte) catch return;
                     }
                 },
-                else => unreachable,
+                else => {},
             }
         }
     }
@@ -59,8 +58,7 @@ pub const Console = struct {
         cpu.storeDevice(u8, type_port, 0x1);
         cpu.storeDevice(u8, read_port, byte);
 
-        if (console_vector > 0x000) {
+        if (console_vector > 0x000)
             cpu.runVector(console_vector);
-        }
     }
 };

@@ -73,9 +73,16 @@ pub const StackView = struct {
 
     pub fn pop(self: *StackView, comptime T: type) T {
         if (self.keep) {
-            const val = self.stack.peek(T);
-            self.pop_offset +%= @sizeOf(T);
-            return val;
+            defer self.pop_offset +%= @sizeOf(T);
+            return switch (T) {
+                u8 => self.stack.data[self.stack.sp -% 1 -% self.pop_offset],
+                u16 => blk: {
+                    const lsb = self.stack.data[self.stack.sp -% 1 -% self.pop_offset];
+                    const msb = self.stack.data[self.stack.sp -% 2 -% self.pop_offset];
+                    break :blk (@as(u16, msb) << 8) | lsb;
+                },
+                else => unreachable,
+            };
         } else {
             return self.stack.pop(T);
         }
@@ -204,8 +211,10 @@ pub const Uxn = struct {
             }
             self.op_sv.stack = op_stack;
             self.op_sv.keep = keep_mode;
+            self.op_sv.pop_offset = 0;
             self.sec_sv.stack = sec_stack;
             self.sec_sv.keep = keep_mode;
+            self.sec_sv.pop_offset = 0;
 
             if (short_mode) {
                 if (self.dispatch(u16, instr)) return 1;
@@ -458,10 +467,8 @@ pub const Uxn = struct {
         const dev_addr = self.op_sv.pop(u8);
         const val = self.op_sv.pop(T);
         self.storeDevice(T, dev_addr, val);
-        if (dev_addr == 0x18 or dev_addr == 0x19) {
-            if (self.intercept_fn) |f| {
-                f(self.intercept_ctx, self, dev_addr, true);
-            }
+        if (self.intercept_fn) |f| {
+            f(self.intercept_ctx, self, dev_addr, true);
         }
     }
 
