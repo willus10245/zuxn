@@ -1,6 +1,6 @@
 const std = @import("std");
-const Uxn = @import("uxn.zig").Uxn;
-const Varvara = @import("varvara.zig").Varvara;
+const Uxn = @import("uxn-core").Uxn;
+const Varvara = @import("uxn-varvara").Varvara;
 const Io = std.Io;
 
 const logger = std.log.scoped(.uxn);

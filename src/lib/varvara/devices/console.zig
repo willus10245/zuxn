@@ -1,5 +1,5 @@
 const std = @import("std");
-const Cpu = @import("../uxn.zig").Uxn;
+const Cpu = @import("uxn-core").Uxn;
 
 const logger = std.log.scoped(.uxn_varvara_console);
 

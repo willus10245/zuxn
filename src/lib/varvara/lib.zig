@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Cpu = @import("uxn.zig").Uxn;
+const Cpu = @import("uxn-core").Uxn;
 const console = @import("devices/console.zig");
 const system = @import("devices/system.zig");
 
