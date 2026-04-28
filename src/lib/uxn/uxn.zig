@@ -1,4 +1,5 @@
 const std = @import("std");
+const Opcode = @import("opcodes.zig").Opcode;
 
 const logger = std.log.scoped(.uxn_cpu);
 
@@ -128,81 +129,25 @@ pub const Uxn = struct {
         std.debug.print("\n", .{});
     }
 
-    fn dispatch(self: *Uxn, comptime T: type, instr: u8) bool {
-        switch (instr) {
-            0x80, 0xA0, 0xC0, 0xE0 => self.op_lit(T),
-            else => {
-                const base_op = instr & 0x1F;
-                switch (base_op) {
-                    0x00 => self.op_brk(instr),
-                    // Stack shuffling
-                    0x01 => self.op_inc(T),
-                    0x02 => self.op_pop(T),
-                    0x03 => self.op_nip(T),
-                    0x04 => self.op_swp(T),
-                    0x05 => self.op_rot(T),
-                    0x06 => self.op_dup(T),
-                    0x07 => self.op_ovr(T),
-                    // Comparison
-                    0x08 => self.op_equ(T),
-                    0x09 => self.op_neq(T),
-                    0x0A => self.op_gth(T),
-                    0x0B => self.op_lth(T),
-                    // Contol flow
-                    0x0C => self.op_jmp(T),
-                    0x0D => self.op_jcn(T),
-                    0x0E => self.op_jsr(T),
-                    // Stack swap
-                    0x0F => self.op_sth(T),
-                    // Load/store memory
-                    0x10 => self.op_ldz(T),
-                    0x11 => self.op_stz(T),
-                    0x12 => self.op_ldr(T),
-                    0x13 => self.op_str(T),
-                    0x14 => self.op_lda(T),
-                    0x15 => self.op_sta(T),
-                    // IO
-                    0x16 => self.op_dei(T),
-                    0x17 => self.op_deo(T),
-                    // Arithemtic
-                    0x18 => self.op_add(T),
-                    0x19 => self.op_sub(T),
-                    0x1A => self.op_mul(T),
-                    0x1B => self.op_div(T),
-                    // Bitwise
-                    0x1C => self.op_and(T),
-                    0x1D => self.op_ora(T),
-                    0x1E => self.op_eor(T),
-                    0x1F => self.op_sft(T),
-                    else => return true,
-                }
-            },
-        }
-        return false;
-    }
-
     pub fn runVector(self: *Uxn, pc: u16) void {
         self.pc = pc;
         _ = self.run();
     }
 
     pub fn run(self: *Uxn) u1 {
+        @setEvalBranchQuota(2048);
+
         if (self.pc == 0x00 or self.dev[0x0f] != 0x00) return 0;
 
-        while (self.mem[self.pc] != 0x00) {
-            const instr = self.mem[self.pc];
+        while (Opcode.fromByte(self.mem[self.pc]) != .BRK) {
+            const op = Opcode.fromByte(self.mem[self.pc]);
             // self.dumpStacks();
-            // logger.debug("PC {x:0>4}: executing {x:0>4}", .{ self.pc, instr });
+            // logger.debug("PC {x:0>4}: executing {s}", .{ self.pc, op.mnemonic() });
             self.pc +%= 1;
-
-            // decode modes
-            const keep_mode = (instr & 0x80) != 0;
-            const ret_mode = (instr & 0x40) != 0;
-            const short_mode = (instr & 0x20) != 0;
 
             var op_stack: *Stack = undefined;
             var sec_stack: *Stack = undefined;
-            if (ret_mode) {
+            if (op.returnMode()) {
                 op_stack = &self.rst;
                 sec_stack = &self.wst;
             } else {
@@ -210,16 +155,71 @@ pub const Uxn = struct {
                 sec_stack = &self.rst;
             }
             self.op_sv.stack = op_stack;
-            self.op_sv.keep = keep_mode;
+            self.op_sv.keep = op.keepMode();
             self.op_sv.pop_offset = 0;
             self.sec_sv.stack = sec_stack;
-            self.sec_sv.keep = keep_mode;
+            self.sec_sv.keep = op.keepMode();
             self.sec_sv.pop_offset = 0;
 
-            if (short_mode) {
-                if (self.dispatch(u16, instr)) return 1;
-            } else {
-                if (self.dispatch(u8, instr)) return 1;
+            switch (op) {
+                inline .LIT, .LIT2, .LITr, .LIT2r => |opcode| self.op_lit(opcode.operandType()),
+
+                inline .JCI, .JMI, .JSI => |opcode| {
+                    const offset = self.fetch(u16);
+
+                    if (opcode == .JSI)
+                        self.rst.pushShort(self.pc);
+
+                    if (opcode != .JCI or self.wst.popByte() != 0x00)
+                        self.pc +%= offset;
+                },
+
+                inline else => |opcode| {
+                    const base_op = Opcode.baseOpcode(opcode);
+                    const T = opcode.operandType();
+                    switch (base_op) {
+                        .BRK => unreachable,
+                        // Stack shuffling
+                        .INC => self.op_inc(T),
+                        .POP => self.op_pop(T),
+                        .NIP => self.op_nip(T),
+                        .SWP => self.op_swp(T),
+                        .ROT => self.op_rot(T),
+                        .DUP => self.op_dup(T),
+                        .OVR => self.op_ovr(T),
+                        // Comparison
+                        .EQU => self.op_equ(T),
+                        .NEQ => self.op_neq(T),
+                        .GTH => self.op_gth(T),
+                        .LTH => self.op_lth(T),
+                        // Contol flow
+                        .JMP => self.op_jmp(T),
+                        .JCN => self.op_jcn(T),
+                        .JSR => self.op_jsr(T),
+                        // Stack swap
+                        .STH => self.op_sth(T),
+                        // Load/store memory
+                        .LDZ => self.op_ldz(T),
+                        .STZ => self.op_stz(T),
+                        .LDR => self.op_ldr(T),
+                        .STR => self.op_str(T),
+                        .LDA => self.op_lda(T),
+                        .STA => self.op_sta(T),
+                        // IO
+                        .DEI => self.op_dei(T),
+                        .DEO => self.op_deo(T),
+                        // Arithemtic
+                        .ADD => self.op_add(T),
+                        .SUB => self.op_sub(T),
+                        .MUL => self.op_mul(T),
+                        .DIV => self.op_div(T),
+                        // Bitwise
+                        .AND => self.op_and(T),
+                        .ORA => self.op_ora(T),
+                        .EOR => self.op_eor(T),
+                        .SFT => self.op_sft(T),
+                    }
+                },
             }
         }
         return 0;
@@ -272,30 +272,6 @@ pub const Uxn = struct {
     }
 
     // Op Codes
-    fn op_brk(self: *Uxn, instr: u8) void {
-        switch (instr) {
-            // BRK
-            0x00 => unreachable,
-            // JCI
-            0x20 => {
-                const offset = self.fetch(u16);
-                if (self.wst.popByte() != 0x00) self.pc +%= offset;
-            },
-            // JMI
-            0x40 => {
-                const offset = self.fetch(u16);
-                self.pc +%= offset;
-            },
-            // JSI
-            0x60 => {
-                const offset = self.fetch(u16);
-                self.rst.pushShort(self.pc);
-                self.pc +%= offset;
-            },
-            else => unreachable,
-        }
-    }
-
     fn op_inc(self: *Uxn, comptime T: type) void {
         const val = self.op_sv.pop(T);
         self.op_sv.push(T, val +% 1);

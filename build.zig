@@ -33,6 +33,11 @@ pub fn build(b: *std.Build) void {
         }},
     });
 
+    // const asm_mod = b.addModule("uxn-asm", .{ .root_source_file = b.path("src/lib/asm/lib.zig"), .imports = &.{.{
+    //     .name = "uxn-core",
+    //     .module = core_mod,
+    // }} });
+
     const zuxncli = b.addExecutable(.{
         .name = "zuxncli",
         .root_module = b.createModule(.{
@@ -78,6 +83,11 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const asm_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/lib/asm/lib.zig"), .target = target, .optimize = optimize, .imports = &.{.{
+        .name = "uxn-core",
+        .module = core_mod,
+    }} }) });
+
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
@@ -86,12 +96,14 @@ pub fn build(b: *std.Build) void {
     });
 
     // A run step that will run the second test executable.
+    const run_asm_tests = b.addRunArtifact(asm_tests);
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_asm_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
