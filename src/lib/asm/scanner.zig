@@ -144,8 +144,8 @@ pub fn Scanner(comptime lim: Limits) type {
             for (label) |byte| {
                 if (ascii.isLower(byte) or !ascii.isAlphanumeric(byte)) {
                     break;
-                } else return ScanError.UppercaseLabel;
-            }
+                }
+            } else return ScanError.UppercaseLabel;
 
             return label;
         }
