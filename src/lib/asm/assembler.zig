@@ -8,6 +8,9 @@ pub const AssemblerError = error{
     MissingParentLabel,
     UndefinedLabel,
     ReferenceTooFar,
+    TooManyMacros,
+    InvalidMacro,
+    UndefinedMacro,
 };
 
 pub fn Assembler(comptime lim: scan.Limits) type {
@@ -26,10 +29,16 @@ pub fn Assembler(comptime lim: scan.Limits) type {
             type: Scanner.AddressType,
         };
 
+        pub const Macro = struct {
+            name: Scanner.LabelName,
+            body: std.ArrayListUnmanaged(Scanner.SourceToken),
+        };
+
         alloc: mem.Allocator,
         rom_length: usize = 0,
 
         labels: std.ArrayListUnmanaged(LabelDef) = .empty,
+        macros: std.ArrayListUnmanaged(Macro) = .empty,
 
         last_parent_label: ?Scanner.LabelName = null,
 
@@ -38,11 +47,11 @@ pub fn Assembler(comptime lim: scan.Limits) type {
         }
 
         pub fn deinit(self: *@This()) void {
-            for (self.labels.items) |*lbl| {
-                lbl.refs.deinit(self.alloc);
-            }
+            for (self.labels.items) |*lbl| lbl.refs.deinit(self.alloc);
+            for (self.macros.items) |*m| m.body.deinit(self.alloc);
 
             self.labels.deinit(self.alloc);
+            self.macros.deinit(self.alloc);
         }
 
         pub fn assemble(self: *@This(), input: *Io.Reader, output: []u8) !void {
@@ -51,7 +60,7 @@ pub fn Assembler(comptime lim: scan.Limits) type {
             var output_writer: Io.Writer = .fixed(output);
 
             while (try scanner.readToken(input)) |token| {
-                try self.processToken(token, &output_writer);
+                try self.processToken(&scanner, token, input, &output_writer);
             }
 
             self.rom_length = @truncate(output_writer.end);
@@ -78,7 +87,7 @@ pub fn Assembler(comptime lim: scan.Limits) type {
             return null;
         }
 
-        fn processToken(self: *@This(), token: Scanner.SourceToken, output: *Io.Writer) !void {
+        fn processToken(self: *@This(), scanner: *Scanner, token: Scanner.SourceToken, input: *Io.Reader, output: *Io.Writer) !void {
             // std.debug.print("token: {any}\n", .{token.token});
             switch (token.token) {
                 .instruction => |instr| {
@@ -136,6 +145,32 @@ pub fn Assembler(comptime lim: scan.Limits) type {
                     }
                 },
                 .word => |word| try output.writeAll(std.mem.sliceTo(&word, 0)),
+                .macro_definition => |name| {
+                    // Open curly after macro name declaration gets scanned as a JSI with label '{'
+                    const open_curly = try scanner.readToken(input) orelse return AssemblerError.InvalidMacro;
+                    if (open_curly.token != .jsi) return AssemblerError.InvalidMacro;
+
+                    var body = std.ArrayListUnmanaged(Scanner.SourceToken).empty;
+
+                    while (try scanner.readToken(input)) |tkn| {
+                        if (tkn.token == .closing_curly)
+                            break;
+
+                        body.append(self.alloc, tkn) catch return AssemblerError.InvalidMacro;
+                    }
+
+                    self.macros.append(self.alloc, .{ .name = name, .body = body }) catch return AssemblerError.TooManyMacros;
+                },
+                .macro_usage => |name| {
+                    const macro_def = for (self.macros.items) |mac| {
+                        if (mem.eql(u8, &mac.name, &name))
+                            break mac;
+                    } else return AssemblerError.UndefinedMacro;
+
+                    for (macro_def.body.items) |body_token| {
+                        try self.processToken(scanner, body_token, input, output);
+                    }
+                },
                 else => unreachable,
             }
         }
@@ -221,6 +256,23 @@ test "assemble can assemble labels" {
     var input: Io.Reader = .fixed("|10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1\n|0100 LIT 68 .Console/write DEO LIT 0a .Console/write DEO\n");
     const expected_rom: [0x10a]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 };
     var output: [0x10a]u8 = [1]u8{0x00} ** 0x10a;
+    try assembler.assemble(&input, &output);
+    try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+test "assemble can assemble macros" {
+    const alloc = testing.allocator;
+    const A = Assembler(.{});
+    var assembler: A = .init(alloc);
+    defer assembler.deinit();
+    const program =
+        \\|10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1
+        \\%EMIT { .Console/write DEO }
+        \\|0100 LIT "h EMIT
+    ;
+    var input: Io.Reader = .fixed(program);
+    const expected_rom: [0x105]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17 };
+    var output: [0x105]u8 = [1]u8{0x00} ** 0x105;
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }

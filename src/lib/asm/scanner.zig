@@ -61,6 +61,9 @@ pub fn Scanner(comptime lim: Limits) type {
 
         location: Location = .{ .line = 1, .c = 1 },
 
+        macro_names: [0x100]LabelName = undefined,
+        macro_count: usize = 0,
+
         pub const Token = union(enum) {
             instruction: Instruction,
             literal: Literal,
@@ -73,6 +76,8 @@ pub fn Scanner(comptime lim: Limits) type {
             jsi: Label,
             closing_curly: void,
             word: [limits.word_length:0]u8,
+            macro_definition: LabelName,
+            macro_usage: LabelName,
         };
 
         pub const SourceToken = struct {
@@ -92,6 +97,20 @@ pub fn Scanner(comptime lim: Limits) type {
             } else {
                 return .{ .parent = label_name };
             }
+        }
+
+        fn findMacro(self: *@This(), name: LabelName) bool {
+            for (self.macro_names) |n| {
+                if (std.mem.eql(u8, &n, &name)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        fn registerMacro(self: *@This(), name: LabelName) void {
+            self.macro_names[self.macro_count] = name;
+            self.macro_count += 1;
         }
 
         fn parseHexDigit(byte: u8) !u4 {
@@ -309,26 +328,38 @@ pub fn Scanner(comptime lim: Limits) type {
                         break :blk .{ .word = word };
                     },
 
+                    '%' => blk: {
+                        const macro_name = try self.readLabel(input);
+
+                        end = Location{ .line = start.line, .c = start.c + std.mem.sliceTo(&macro_name, 0).len };
+
+                        self.registerMacro(macro_name);
+
+                        break :blk .{ .macro_definition = macro_name };
+                    },
+
                     else => blk: {
-                        var needle_buffer = [1:0]u8{b} ++ [1:0]u8{0x00} ** (limits.identifier_length - 1);
+                        var needle = [1:0]u8{b} ++ [1:0]u8{0x00} ** (limits.identifier_length - 1);
                         const rest = try self.readToWhitespace(limits.identifier_length, input);
 
                         end = Location{ .line = start.line, .c = start.c + std.mem.sliceTo(&rest, 0).len };
 
                         for (std.mem.sliceTo(&rest, 0), 1..) |byte, i|
-                            needle_buffer[i] = byte;
+                            needle[i] = byte;
 
-                        if (std.meta.stringToEnum(cpu.opcodes.Opcode, std.mem.sliceTo(&needle_buffer, 0))) |opcode| {
+                        if (std.meta.stringToEnum(cpu.opcodes.Opcode, std.mem.sliceTo(&needle, 0))) |opcode| {
                             break :blk .{ .instruction = .{ .mnemonic = @tagName(opcode), .opcode = @intFromEnum(opcode) } };
                         } else {
-                            const needle = std.mem.sliceTo(&needle_buffer, 0);
+                            const needle_slice = std.mem.sliceTo(&needle, 0);
 
-                            break :blk if (parseHexNumber(u8, needle, true) catch null) |byte|
+                            break :blk if (parseHexNumber(u8, needle_slice, true) catch null) |byte|
                                 .{ .raw_literal = .{ .byte = byte } }
-                            else if (parseHexNumber(u16, needle, true) catch null) |short|
+                            else if (parseHexNumber(u16, needle_slice, true) catch null) |short|
                                 .{ .raw_literal = .{ .short = short } }
+                            else if (self.findMacro(needle))
+                                .{ .macro_usage = needle }
                             else
-                                unreachable;
+                                .{ .jsi = toLabel(needle) };
                         }
                     },
                 };
@@ -601,6 +632,28 @@ test "readToken reads instructions" {
     try testing.expectEqual(S.Token{ .instruction = .{ .mnemonic = "DEO", .opcode = 0x17 } }, token.?.token);
     try testing.expectEqual(S.Location{ .line = 1, .c = 1 }, token.?.start);
     try testing.expectEqual(S.Location{ .line = 1, .c = 3 }, token.?.end);
+}
+
+test "readToken reads macro definition" {
+    const S = Scanner(.{});
+    var scanner: S = .{};
+    var r: Io.Reader = .fixed("%MACRO");
+    const token = try scanner.readToken(&r);
+    try testing.expectEqual(S.Token{ .macro_definition = labelName("MACRO") }, token.?.token);
+    try testing.expectEqual(S.Location{ .line = 1, .c = 1 }, token.?.start);
+    try testing.expectEqual(S.Location{ .line = 1, .c = 6 }, token.?.end);
+}
+
+test "readToken reads macro usage" {
+    const S = Scanner(.{});
+    var scanner: S = .{};
+    var r: Io.Reader = .fixed("MACRO");
+    const macro_name = labelName("MACRO");
+    scanner.macro_names[0] = macro_name;
+    const token = try scanner.readToken(&r);
+    try testing.expectEqual(S.Token{ .macro_usage = macro_name }, token.?.token);
+    try testing.expectEqual(S.Location{ .line = 1, .c = 1 }, token.?.start);
+    try testing.expectEqual(S.Location{ .line = 1, .c = 5 }, token.?.end);
 }
 
 fn labelName(comptime s: []const u8) Scanner(.{}).LabelName {
