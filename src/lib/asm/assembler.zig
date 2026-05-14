@@ -27,6 +27,7 @@ pub fn Assembler(comptime lim: scan.Limits) type {
         };
 
         alloc: mem.Allocator,
+        rom_length: usize = 0,
 
         labels: std.ArrayListUnmanaged(LabelDef) = .empty,
 
@@ -52,6 +53,8 @@ pub fn Assembler(comptime lim: scan.Limits) type {
             while (try scanner.readToken(input)) |token| {
                 try self.processToken(token, &output_writer);
             }
+
+            self.rom_length = @truncate(output_writer.end);
 
             try self.resolveReferences(output);
         }
@@ -161,7 +164,7 @@ pub fn Assembler(comptime lim: scan.Limits) type {
         fn resolveOffset(self: *@This(), offset: Scanner.Offset) !u16 {
             return switch (offset) {
                 .literal => |lit| lit,
-                .label => |lbl| if (try self.lookupLabel(try self.resolveLabelName(lbl))) |l| l.addr orelse AssemblerError.UndefinedLabel else AssemblerError.UndefinedLabel,
+                .label => |lbl| if (try self.lookupLabel(lbl)) |l| l.addr else AssemblerError.UndefinedLabel,
             };
         }
 

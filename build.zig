@@ -33,10 +33,23 @@ pub fn build(b: *std.Build) void {
         }},
     });
 
-    // const asm_mod = b.addModule("uxn-asm", .{ .root_source_file = b.path("src/lib/asm/lib.zig"), .imports = &.{.{
-    //     .name = "uxn-core",
-    //     .module = core_mod,
-    // }} });
+    const asm_mod = b.addModule("uxn-asm", .{ .root_source_file = b.path("src/lib/asm/lib.zig"), .imports = &.{.{
+        .name = "uxn-core",
+        .module = core_mod,
+    }} });
+
+    const zuxnasm = b.addExecutable(.{
+        .name = "zuxnasm",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zuxnasm/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "uxn-core", .module = core_mod },
+                .{ .name = "uxn-asm", .module = asm_mod },
+            },
+        }),
+    });
 
     const zuxncli = b.addExecutable(.{
         .name = "zuxncli",
@@ -56,13 +69,15 @@ pub fn build(b: *std.Build) void {
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(zuxncli);
+    b.installArtifact(zuxnasm);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
     // For a top level step to actually do something, it must depend on other
     // steps (e.g. a Run step, as we will see in a moment).
-    const run_step = b.step("run", "Run the app");
+    const run_cli_step = b.step("run-cli", "Run the CLI emulator");
+    const run_asm_step = b.step("run-asm", "Run the assembler");
 
     // This creates a RunArtifact step in the build graph. A RunArtifact step
     // invokes an executable compiled by Zig. Steps will only be executed by the
@@ -70,17 +85,22 @@ pub fn build(b: *std.Build) void {
     // or if another step depends on it, so it's up to you to define when and
     // how this Run step will be executed. In our case we want to run it when
     // the user runs `zig build run`, so we create a dependency link.
-    const run_cmd = b.addRunArtifact(zuxncli);
-    run_step.dependOn(&run_cmd.step);
+    const run_cli_cmd = b.addRunArtifact(zuxncli);
+    const run_asm_cmd = b.addRunArtifact(zuxnasm);
 
     // By making the run step depend on the default step, it will be run from the
     // installation directory rather than directly from within the cache directory.
-    run_cmd.step.dependOn(b.getInstallStep());
+    run_cli_cmd.step.dependOn(b.getInstallStep());
+    run_asm_cmd.step.dependOn(b.getInstallStep());
+
+    run_cli_step.dependOn(&run_cli_cmd.step);
+    run_asm_step.dependOn(&run_asm_cmd.step);
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
     if (b.args) |args| {
-        run_cmd.addArgs(args);
+        run_cli_cmd.addArgs(args);
+        run_asm_cmd.addArgs(args);
     }
 
     const asm_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/lib/asm/lib.zig"), .target = target, .optimize = optimize, .imports = &.{.{
