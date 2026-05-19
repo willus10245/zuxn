@@ -7,6 +7,8 @@ const mem = std.mem;
 pub const AssemblerError = error{
     MissingParentLabel,
     UndefinedLabel,
+    TooManyLabels,
+    LabelAlreadyDefined,
     ReferenceTooFar,
     TooManyMacros,
     InvalidMacro,
@@ -19,14 +21,15 @@ pub fn Assembler(comptime lim: scan.Limits) type {
 
         pub const LabelDef = struct {
             label: Scanner.LabelName,
-            addr: u16,
+            addr: ?u16,
             refs: std.ArrayListUnmanaged(Reference),
         };
 
+        pub const ReferenceType = union(enum) { address: Scanner.AddressType, jump: void };
+
         pub const Reference = struct {
             addr: u16,
-            offset: u16,
-            type: Scanner.AddressType,
+            type: ReferenceType,
         };
 
         pub const Macro = struct {
@@ -65,19 +68,22 @@ pub fn Assembler(comptime lim: scan.Limits) type {
 
             self.rom_length = @truncate(output_writer.end);
 
+            // std.debug.print("pre-resolve: {any}\n", .{output});
+
             try self.resolveReferences(output);
         }
 
         fn defineLabel(self: *@This(), label: Scanner.Label, addr: u16) !void {
-            const label_name = try self.resolveLabelName(label);
+            const def = try self.lookupOrCreateLabel(label);
 
-            const def = LabelDef{ .addr = addr, .label = label_name, .refs = .empty };
-            try self.labels.append(self.alloc, def);
+            if (def.addr != null) {
+                return AssemblerError.LabelAlreadyDefined;
+            }
+
+            def.addr = addr;
         }
 
-        fn lookupLabel(self: *@This(), label: Scanner.Label) !?*LabelDef {
-            const label_name = try self.resolveLabelName(label);
-
+        fn lookupLabel(self: *@This(), label_name: Scanner.LabelName) ?*LabelDef {
             for (self.labels.items) |*lbl| {
                 if (mem.eql(u8, &label_name, &lbl.label)) {
                     return lbl;
@@ -85,6 +91,20 @@ pub fn Assembler(comptime lim: scan.Limits) type {
             }
 
             return null;
+        }
+
+        fn lookupOrCreateLabel(self: *@This(), label: Scanner.Label) !*LabelDef {
+            const label_name = try self.resolveLabelName(label);
+
+            if (self.lookupLabel(label_name)) |label_def| {
+                return label_def;
+            }
+
+            const def = self.labels.addOne(self.alloc) catch return AssemblerError.TooManyLabels;
+
+            def.* = LabelDef{ .addr = null, .label = label_name, .refs = .empty };
+
+            return def;
         }
 
         fn processToken(self: *@This(), scanner: *Scanner, token: Scanner.SourceToken, input: *Io.Reader, output: *Io.Writer) !void {
@@ -101,14 +121,18 @@ pub fn Assembler(comptime lim: scan.Limits) type {
                     }
                 },
                 .address => |address| {
-                    const def = try self.lookupLabel(address.label) orelse return AssemblerError.UndefinedLabel;
+                    const def = try self.lookupOrCreateLabel(address.label);
 
                     const ref = try def.refs.addOne(self.alloc);
 
+                    const ref_addr: u16 = switch (address.type) {
+                        .zero, .relative, .absolute => @truncate(output.end + 1),
+                        .raw_zero, .raw_relative, .raw_absolute => @truncate(output.end),
+                    };
+
                     ref.* = .{
-                        .addr = @truncate(output.end),
-                        .offset = 0,
-                        .type = address.type,
+                        .addr = ref_addr,
+                        .type = ReferenceType{ .address = address.type },
                     };
 
                     switch (address.type) {
@@ -171,6 +195,19 @@ pub fn Assembler(comptime lim: scan.Limits) type {
                         try self.processToken(scanner, body_token, input, output);
                     }
                 },
+                .jci => |label| {
+                    const def = try self.lookupOrCreateLabel(label);
+                    const ref = try def.refs.addOne(self.alloc);
+
+                    try output.writeByte(0x20);
+
+                    ref.* = .{
+                        .addr = @truncate(output.end),
+                        .type = .jump,
+                    };
+
+                    try output.writeInt(u16, 0xdbdb, .big);
+                },
                 else => unreachable,
             }
         }
@@ -199,34 +236,38 @@ pub fn Assembler(comptime lim: scan.Limits) type {
         fn resolveOffset(self: *@This(), offset: Scanner.Offset) !u16 {
             return switch (offset) {
                 .literal => |lit| lit,
-                .label => |lbl| if (try self.lookupLabel(lbl)) |l| l.addr else AssemblerError.UndefinedLabel,
+                .label => |lbl| if (self.lookupLabel(try self.resolveLabelName(lbl))) |l| l.addr orelse AssemblerError.UndefinedLabel else AssemblerError.UndefinedLabel,
             };
         }
 
         fn resolveReferences(self: *@This(), output: []u8) !void {
             for (self.labels.items) |label| {
-                for (label.refs.items) |ref| {
-                    const position = switch (ref.type) {
-                        // After the LIT opcode
-                        .zero, .relative, .absolute => ref.addr + 1,
+                // std.debug.print("label: {any}\n", .{label});
+                if (label.addr) |addr| {
+                    for (label.refs.items) |ref| {
+                        // std.debug.print("  ref: {any}\n", .{ref});
+                        switch (ref.type) {
+                            .address => |address| switch (address) {
+                                .zero, .raw_zero => {
+                                    output[ref.addr] = @truncate(addr);
+                                },
+                                .relative, .raw_relative => {
+                                    const offset: i32 = @as(i32, addr) - @as(i32, ref.addr) - 2;
+                                    const offset_byte = std.math.cast(i8, offset) orelse return AssemblerError.ReferenceTooFar;
 
-                        // No opcode to skip
-                        .raw_zero, .raw_relative, .raw_absolute => ref.addr,
-                    };
+                                    output[ref.addr] = @bitCast(offset_byte);
+                                },
+                                .absolute, .raw_absolute => {
+                                    mem.writeInt(u16, @ptrCast(output[ref.addr .. ref.addr + 2]), addr, .big);
+                                },
+                            },
+                            .jump => {
+                                const offset: i32 = @as(i32, addr) - @as(i32, ref.addr) - 2;
+                                const offset_short = std.math.cast(i16, offset) orelse return AssemblerError.ReferenceTooFar;
 
-                    switch (ref.type) {
-                        .zero, .raw_zero => {
-                            output[position] = @truncate(label.addr);
-                        },
-                        .relative, .raw_relative => {
-                            const offset: i32 = @as(i32, label.addr) - @as(i32, ref.addr) - 2;
-                            const offset_byte = std.math.cast(i8, offset) orelse return AssemblerError.ReferenceTooFar;
-
-                            output[position] = @bitCast(offset_byte);
-                        },
-                        .absolute, .raw_absolute => {
-                            mem.writeInt(u16, @ptrCast(output[position .. position + 2]), label.addr, .big);
-                        },
+                                mem.writeInt(u16, @ptrCast(output[ref.addr .. ref.addr + 2]), @bitCast(offset_short), .big);
+                            },
+                        }
                     }
                 }
             }
@@ -274,5 +315,18 @@ test "assemble can assemble macros" {
     const expected_rom: [0x105]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17 };
     var output: [0x105]u8 = [1]u8{0x00} ** 0x105;
     try assembler.assemble(&input, &output);
+    try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+test "assemble can assemble jci with label" {
+    const alloc = testing.allocator;
+    const A = Assembler(.{});
+    var assembler: A = .init(alloc);
+    defer assembler.deinit();
+    var input: Io.Reader = .fixed("#0a DUP ?label INC @label\n");
+    const expected_rom: [0x07]u8 = [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
+    var output: [0x07]u8 = [1]u8{0x00} ** 0x07;
+    try assembler.assemble(&input, &output);
+    // std.debug.print("output: {any}\n", .{output});
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
