@@ -16,9 +16,6 @@ pub fn main(init: std.process.Init) !void {
 
     // Accessing command line arguments:
     const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
-    }
 
     // In order to do I/O operations need an `Io` instance.
     const io = init.io;

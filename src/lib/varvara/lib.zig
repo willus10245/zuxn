@@ -1,8 +1,9 @@
 const std = @import("std");
 
 const Cpu = @import("uxn-core").Uxn;
-const console = @import("devices/console.zig");
 const system = @import("devices/system.zig");
+const console = @import("devices/console.zig");
+const datetime = @import("devices/datetime.zig");
 
 const logger = std.log.scoped(.uxn_varvara);
 
@@ -20,6 +21,7 @@ pub const Varvara = struct {
         switch (port & 0xF0) {
             0x00 => self.system_device.intercept(cpu, port, is_output),
             0x10 => self.console_device.intercept(cpu, port, is_output),
+            0xc0 => datetime.intercept(cpu, port, is_output),
             else => {},
         }
     }
