@@ -13,6 +13,8 @@ pub const AssemblerError = error{
     TooManyMacros,
     InvalidMacro,
     UndefinedMacro,
+    TooManyLambdas,
+    InvalidLambda,
 };
 
 pub fn Assembler(comptime lim: scan.Limits) type {
@@ -42,6 +44,8 @@ pub fn Assembler(comptime lim: scan.Limits) type {
 
         labels: std.ArrayListUnmanaged(LabelDef) = .empty,
         macros: std.ArrayListUnmanaged(Macro) = .empty,
+        lambdas: std.ArrayListUnmanaged(usize) = .empty,
+        lambda_counter: usize = 0,
 
         last_parent_label: ?Scanner.LabelName = null,
 
@@ -55,12 +59,14 @@ pub fn Assembler(comptime lim: scan.Limits) type {
 
             self.labels.deinit(self.alloc);
             self.macros.deinit(self.alloc);
+            self.lambdas.deinit(self.alloc);
         }
 
         pub fn assemble(self: *@This(), input: *Io.Reader, output: []u8) !void {
             var scanner = Scanner{};
 
             var output_writer: Io.Writer = .fixed(output);
+            output_writer.end = 0x100; // initialize PC to PAGE.
 
             while (try scanner.readToken(input)) |token| {
                 try self.processToken(&scanner, token, input, &output_writer);
@@ -81,6 +87,24 @@ pub fn Assembler(comptime lim: scan.Limits) type {
             }
 
             def.addr = addr;
+        }
+
+        fn lambdaLabel(id: usize) Scanner.LabelName {
+            var lambda_label = [1:0]u8{0x00} ** Scanner.limits.identifier_length;
+            var label_writer: Io.Writer = .fixed(&lambda_label);
+            label_writer.print("λ{x:0>2}", .{id}) catch unreachable;
+
+            return lambda_label;
+        }
+
+        fn addLambda(self: *@This()) !Scanner.LabelName {
+            const lambda_label = lambdaLabel(self.lambda_counter);
+
+            self.lambdas.append(self.alloc, self.lambda_counter) catch return AssemblerError.TooManyLambdas;
+
+            self.lambda_counter += 1;
+
+            return lambda_label;
         }
 
         fn lookupLabel(self: *@This(), label_name: Scanner.LabelName) ?*LabelDef {
@@ -208,6 +232,12 @@ pub fn Assembler(comptime lim: scan.Limits) type {
 
                     try output.writeInt(u16, 0xdbdb, .big);
                 },
+                .closing_curly => {
+                    const lambda_id = self.lambdas.pop() orelse return AssemblerError.InvalidLambda;
+                    const lambda_label = lambdaLabel(lambda_id);
+
+                    try self.defineLabel(.{ .parent = lambda_label }, @truncate(output.end));
+                },
                 else => unreachable,
             }
         }
@@ -215,7 +245,11 @@ pub fn Assembler(comptime lim: scan.Limits) type {
         fn resolveLabelName(self: *@This(), label: Scanner.Label) !Scanner.LabelName {
             switch (label) {
                 .parent => {
-                    return label.parent;
+                    if (mem.eql(u8, "{", mem.sliceTo(&label.parent, 0))) {
+                        return self.addLambda();
+                    } else {
+                        return label.parent;
+                    }
                 },
                 .child => |chld| {
                     const parent = mem.sliceTo(&(self.last_parent_label orelse return AssemblerError.MissingParentLabel), 0);
@@ -324,8 +358,33 @@ test "assemble can assemble jci with label" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("#0a DUP ?label INC @label\n");
-    const expected_rom: [0x07]u8 = [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
-    var output: [0x07]u8 = [1]u8{0x00} ** 0x07;
+    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    try assembler.assemble(&input, &output);
+    // std.debug.print("output: {any}\n", .{output});
+    try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+test "assemble can assemble relative address" {
+    const alloc = testing.allocator;
+    const A = Assembler(.{});
+    var assembler: A = .init(alloc);
+    defer assembler.deinit();
+    var input: Io.Reader = .fixed("|0100 @label INC ,label");
+    const expected_rom: [0x103]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x01, 0x80, 0xfc };
+    var output: [0x103]u8 = [1]u8{0x00} ** 0x103;
+    try assembler.assemble(&input, &output);
+    try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+test "assemble can assemble jci with lambda" {
+    const alloc = testing.allocator;
+    const A = Assembler(.{});
+    var assembler: A = .init(alloc);
+    defer assembler.deinit();
+    var input: Io.Reader = .fixed("#0a DUP ?{ INC }\n");
+    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
     try assembler.assemble(&input, &output);
     // std.debug.print("output: {any}\n", .{output});
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
