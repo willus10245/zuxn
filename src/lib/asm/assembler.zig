@@ -219,11 +219,15 @@ pub fn Assembler(comptime lim: scan.Limits) type {
                         try self.processToken(scanner, body_token, input, output);
                     }
                 },
-                .jci => |label| {
+                .jci, .jmi, .jsi => |label| {
                     const def = try self.lookupOrCreateLabel(label);
                     const ref = try def.refs.addOne(self.alloc);
 
-                    try output.writeByte(0x20);
+                    try output.writeByte(switch (token.token) {
+                        .jci => 0x20,
+                        .jmi => 0x40,
+                        else => 0x60,
+                    });
 
                     ref.* = .{
                         .addr = @truncate(output.end),
@@ -238,7 +242,6 @@ pub fn Assembler(comptime lim: scan.Limits) type {
 
                     try self.defineLabel(.{ .parent = lambda_label }, @truncate(output.end));
                 },
-                else => unreachable,
             }
         }
 
@@ -384,6 +387,45 @@ test "assemble can assemble jci with lambda" {
     defer assembler.deinit();
     var input: Io.Reader = .fixed("#0a DUP ?{ INC }\n");
     const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    try assembler.assemble(&input, &output);
+    // std.debug.print("output: {any}\n", .{output});
+    try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+test "assemble can assemble jmi with lambda" {
+    const alloc = testing.allocator;
+    const A = Assembler(.{});
+    var assembler: A = .init(alloc);
+    defer assembler.deinit();
+    var input: Io.Reader = .fixed("#0a DUP !{ INC }\n");
+    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x40, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    try assembler.assemble(&input, &output);
+    // std.debug.print("output: {any}\n", .{output});
+    try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+test "assemble can assemble jsi with lambda" {
+    const alloc = testing.allocator;
+    const A = Assembler(.{});
+    var assembler: A = .init(alloc);
+    defer assembler.deinit();
+    var input: Io.Reader = .fixed("#0a DUP { INC }\n");
+    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x60, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    try assembler.assemble(&input, &output);
+    // std.debug.print("output: {any}\n", .{output});
+    try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+test "assemble can assemble jsi with label" {
+    const alloc = testing.allocator;
+    const A = Assembler(.{});
+    var assembler: A = .init(alloc);
+    defer assembler.deinit();
+    var input: Io.Reader = .fixed("#0a DUP label INC @label\n");
+    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x60, 0x00, 0x01, 0x01 };
     var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
     try assembler.assemble(&input, &output);
     // std.debug.print("output: {any}\n", .{output});
