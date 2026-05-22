@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -11,7 +12,14 @@ pub fn build(b: *std.Build) void {
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
     // for restricting supported target set are available.
-    const target = b.standardTargetOptions(.{});
+    //
+    // On Linux we default to musl so that Zig uses its own bundled crt1 rather
+    // than the system one, which on GCC 16+ contains .sframe sections that
+    // Zig's linker cannot handle.
+    const default_target: std.Target.Query = if (builtin.os.tag == .linux) .{
+        .abi = .musl,
+    } else .{};
+    const target = b.standardTargetOptions(.{ .default_target = default_target });
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
@@ -27,6 +35,7 @@ pub fn build(b: *std.Build) void {
 
     const varvara_mod = b.addModule("uxn-varvara", .{
         .root_source_file = b.path("src/lib/varvara/lib.zig"),
+        .link_libc = true,
         .imports = &.{.{
             .name = "uxn-core",
             .module = core_mod,
