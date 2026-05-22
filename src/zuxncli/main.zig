@@ -5,6 +5,10 @@ const Io = std.Io;
 
 const logger = std.log.scoped(.uxn);
 
+pub const std_options: std.Options = .{
+    .log_level = .debug,
+};
+
 fn intercept(ctx: *anyopaque, cpu: *Uxn, port: u8, is_output: bool) void {
     const varv: *Varvara = @ptrCast(@alignCast(ctx));
     varv.intercept(cpu, port, is_output);

@@ -110,23 +110,25 @@ pub const Uxn = struct {
     }
 
     fn dumpStacks(self: *Uxn) void {
-        logger.debug("--------STACK DUMP--------", .{});
         const offset: u8 = 8;
-        std.debug.print("WST ", .{});
+        var buf: [3 * 8]u8 = undefined;
+        var pos: usize = 0;
+
+        pos = 0;
         var wst_i = self.wst.sp -% offset;
-
         while (wst_i != self.wst.sp) : (wst_i +%= 1) {
-            std.debug.print("{x:0>2} ", .{self.wst.data[wst_i]});
+            const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.wst.data[wst_i]}) catch break;
+            pos += s.len;
         }
-        std.debug.print("\n", .{});
+        logger.debug("WST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.wst.sp });
 
-        std.debug.print("RST ", .{});
+        pos = 0;
         var rst_i = self.rst.sp -% offset;
-
         while (rst_i != self.rst.sp) : (rst_i +%= 1) {
-            std.debug.print("{x:0>2} ", .{self.rst.data[rst_i]});
+            const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.rst.data[rst_i]}) catch break;
+            pos += s.len;
         }
-        std.debug.print("\n", .{});
+        logger.debug("RST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.rst.sp });
     }
 
     pub fn runVector(self: *Uxn, pc: u16) void {
@@ -141,8 +143,8 @@ pub const Uxn = struct {
 
         while (Opcode.fromByte(self.mem[self.pc]) != .BRK) {
             const op = Opcode.fromByte(self.mem[self.pc]);
-            // self.dumpStacks();
-            // logger.debug("PC {x:0>4}: executing {s}", .{ self.pc, op.mnemonic() });
+            self.dumpStacks();
+            logger.debug("PC {x:0>4}: executing {s}", .{ self.pc, op.mnemonic() });
             self.pc +%= 1;
 
             var op_stack: *Stack = undefined;
