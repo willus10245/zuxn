@@ -90,7 +90,7 @@ pub fn Assembler(comptime lim: scan.Limits) type {
         }
 
         fn lambdaLabel(id: usize) Scanner.LabelName {
-            var lambda_label = [1:0]u8{0x00} ** Scanner.limits.identifier_length;
+            var lambda_label: [Scanner.limits.identifier_length:0]u8 = @splat(0x00);
             var label_writer: Io.Writer = .fixed(&lambda_label);
             label_writer.print("λ{x:0>2}", .{id}) catch unreachable;
 
@@ -259,7 +259,7 @@ pub fn Assembler(comptime lim: scan.Limits) type {
                     const stripped_parent = mem.sliceTo(parent, '/');
                     const child = mem.sliceTo(&chld, 0);
 
-                    var full_label = [1:0]u8{0x00} ** Scanner.limits.identifier_length;
+                    var full_label: [Scanner.limits.identifier_length:0]u8 = @splat(0x00);
 
                     @memcpy(full_label[0..stripped_parent.len], stripped_parent);
                     @memcpy(full_label[stripped_parent.len + 1 .. stripped_parent.len + 1 + child.len], child);
@@ -320,8 +320,8 @@ test "assemble can assemble" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("( hello.tal )\n|0100 LIT 68 LIT 18 DEO LIT 0a LIT 18 DEO\n");
-    const expected_rom: [0x10a]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 };
-    var output: [0x10a]u8 = [1]u8{0x00} ** 0x10a;
+    const expected_rom: [0x10a]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 };
+    var output: [0x10a]u8 = fill(0x10a, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -332,8 +332,8 @@ test "assemble can assemble labels" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("|10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1\n|0100 LIT 68 .Console/write DEO LIT 0a .Console/write DEO\n");
-    const expected_rom: [0x10a]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 };
-    var output: [0x10a]u8 = [1]u8{0x00} ** 0x10a;
+    const expected_rom: [0x10a]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 };
+    var output: [0x10a]u8 = fill(0x10a, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -349,8 +349,8 @@ test "assemble can assemble macros" {
         \\|0100 LIT "h EMIT
     ;
     var input: Io.Reader = .fixed(program);
-    const expected_rom: [0x105]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17 };
-    var output: [0x105]u8 = [1]u8{0x00} ** 0x105;
+    const expected_rom: [0x105]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17 };
+    var output: [0x105]u8 = fill(0x105, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -361,8 +361,8 @@ test "assemble can assemble jci with label" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("#0a DUP ?label INC @label\n");
-    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
-    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    const expected_rom: [0x107]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = fill(0x107, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -373,8 +373,8 @@ test "assemble can assemble relative address" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("|0100 @label INC ,label");
-    const expected_rom: [0x103]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x01, 0x80, 0xfc };
-    var output: [0x103]u8 = [1]u8{0x00} ** 0x103;
+    const expected_rom: [0x103]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x01, 0x80, 0xfc };
+    var output: [0x103]u8 = fill(0x103, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -385,8 +385,8 @@ test "assemble can assemble jci with lambda" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("#0a DUP ?{ INC }\n");
-    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
-    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    const expected_rom: [0x107]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x0a, 0x06, 0x20, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = fill(0x107, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -397,8 +397,8 @@ test "assemble can assemble jmi with lambda" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("#0a DUP !{ INC }\n");
-    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x40, 0x00, 0x01, 0x01 };
-    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    const expected_rom: [0x107]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x0a, 0x06, 0x40, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = fill(0x107, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -409,8 +409,8 @@ test "assemble can assemble jsi with lambda" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("#0a DUP { INC }\n");
-    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x60, 0x00, 0x01, 0x01 };
-    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    const expected_rom: [0x107]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x0a, 0x06, 0x60, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = fill(0x107, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
 }
@@ -421,8 +421,12 @@ test "assemble can assemble jsi with label" {
     var assembler: A = .init(alloc);
     defer assembler.deinit();
     var input: Io.Reader = .fixed("#0a DUP label INC @label\n");
-    const expected_rom: [0x107]u8 = [1]u8{0x00} ** 0x100 ++ [_]u8{ 0x80, 0x0a, 0x06, 0x60, 0x00, 0x01, 0x01 };
-    var output: [0x107]u8 = [1]u8{0x00} ** 0x107;
+    const expected_rom: [0x107]u8 = fill(0x100, 0x00) ++ [_]u8{ 0x80, 0x0a, 0x06, 0x60, 0x00, 0x01, 0x01 };
+    var output: [0x107]u8 = fill(0x107, 0x00);
     try assembler.assemble(&input, &output);
     try testing.expect(std.mem.eql(u8, &output, &expected_rom));
+}
+
+fn fill(comptime n: usize, comptime v: u8) [n]u8 {
+    return @splat(v);
 }

@@ -4,7 +4,7 @@ const Opcode = @import("opcodes.zig").Opcode;
 const logger = std.log.scoped(.uxn_cpu);
 
 pub const Stack = struct {
-    data: [0x100]u8 = [_]u8{0} ** 0x100,
+    data: [0x100]u8 = @splat(0),
     sp: u8 = 0, // points to next empty slot
 
     pub fn pushByte(self: *Stack, val: u8) void {
@@ -91,8 +91,8 @@ pub const StackView = struct {
 };
 
 pub const Uxn = struct {
-    mem: [0x10000]u8 = [_]u8{0} ** 0x10000, // 64kb
-    dev: [0x100]u8 = [_]u8{0} ** 0x100,
+    mem: [0x10000]u8 = @splat(0), // 64kb
+    dev: [0x100]u8 = @splat(0),
     wst: Stack = Stack{},
     rst: Stack = Stack{},
     pc: u16 = 0x0100,
@@ -105,7 +105,8 @@ pub const Uxn = struct {
 
     pub fn init() Uxn {
         var uxn = Uxn{};
-        uxn.mem = [_]u8{0} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 } ++ [_]u8{0} ** 0xFEF6;
+        // uxn.mem = [_]u8{0} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 } ++ [_]u8{0} ** 0xFEF6;
+        uxn.mem = @as([0x100]u8, @splat(0)) ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 } ++ @as([0xFEF6]u8, @splat(0));
         return uxn;
     }
 
@@ -505,3 +506,74 @@ pub const Uxn = struct {
         self.op_sv.push(T, self.fetch(T));
     }
 };
+
+const testing = std.testing;
+
+/// Loads `program` at 0x0100 into zeroed memory and runs it until BRK.
+fn runProgram(program: []const u8) Uxn {
+    var uxn = Uxn{};
+    @memcpy(uxn.mem[0x0100..][0..program.len], program);
+    uxn.runVector(0x0100);
+    return uxn;
+}
+
+/// Checks both stacks, listed from the bottom of the stack to the top.
+fn expectStacks(uxn: *const Uxn, wst: []const u8, rst: []const u8) !void {
+    try testing.expectEqualSlices(u8, wst, uxn.wst.data[0..uxn.wst.sp]);
+    try testing.expectEqualSlices(u8, rst, uxn.rst.data[0..uxn.rst.sp]);
+}
+
+test "ADD adds bytes" {
+    // #01 #02 ADD
+    const uxn = runProgram(&.{ 0x80, 0x01, 0x80, 0x02, 0x18 });
+    try expectStacks(&uxn, &.{0x03}, &.{});
+}
+
+test "short mode operates on two bytes" {
+    // #1234 #0001 ADD2
+    const uxn = runProgram(&.{ 0xa0, 0x12, 0x34, 0xa0, 0x00, 0x01, 0x38 });
+    try expectStacks(&uxn, &.{ 0x12, 0x35 }, &.{});
+}
+
+test "keep mode leaves operands on the stack" {
+    // #01 #02 ADDk
+    const uxn = runProgram(&.{ 0x80, 0x01, 0x80, 0x02, 0x98 });
+    try expectStacks(&uxn, &.{ 0x01, 0x02, 0x03 }, &.{});
+}
+
+test "return mode operates on the return stack" {
+    // LITr 05 INCr
+    const uxn = runProgram(&.{ 0xc0, 0x05, 0x41 });
+    try expectStacks(&uxn, &.{}, &.{0x06});
+}
+
+test "STH moves a value to the other stack" {
+    // #07 STH
+    const uxn = runProgram(&.{ 0x80, 0x07, 0x0f });
+    try expectStacks(&uxn, &.{}, &.{0x07});
+}
+
+test "JSI pushes the return address and jumps" {
+    // JSI +0001, BRK, #2a
+    const uxn = runProgram(&.{ 0x60, 0x00, 0x01, 0x00, 0x80, 0x2a });
+    try expectStacks(&uxn, &.{0x2a}, &.{ 0x01, 0x03 });
+}
+
+test "STZ and LDZ round trip through the zero page" {
+    // #aa #10 STZ #10 LDZ
+    const uxn = runProgram(&.{ 0x80, 0xaa, 0x80, 0x10, 0x11, 0x80, 0x10, 0x10 });
+    try testing.expectEqual(0xaa, uxn.mem[0x10]);
+    try expectStacks(&uxn, &.{0xaa}, &.{});
+}
+
+test "DIV by zero gives zero" {
+    // #05 #00 DIV
+    const uxn = runProgram(&.{ 0x80, 0x05, 0x80, 0x00, 0x1b });
+    try expectStacks(&uxn, &.{0x00}, &.{});
+}
+
+test "SFT shifts right then left" {
+    // #34 #12 SFT: right by 2 gives 0d, then left by 1 gives 1a
+    const uxn = runProgram(&.{ 0x80, 0x34, 0x80, 0x12, 0x1f });
+    try expectStacks(&uxn, &.{0x1a}, &.{});
+}

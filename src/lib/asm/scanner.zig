@@ -189,7 +189,7 @@ pub fn Scanner(comptime lim: Limits) type {
         }
 
         fn readToWhitespace(self: *@This(), comptime max: usize, input: *Io.Reader) ScanError![max:0]u8 {
-            var output = [1:0]u8{0} ** max;
+            var output: [max:0]u8 = @splat(0);
             var output_writer = Io.Writer.fixed(&output);
 
             while (true) {
@@ -314,7 +314,7 @@ pub fn Scanner(comptime lim: Limits) type {
                     },
 
                     '"' => blk: {
-                        var word = [1:0]u8{0x00} ** limits.word_length;
+                        var word: [limits.word_length:0]u8 = @splat(0x00);
                         var i: usize = 0;
 
                         while (self.readByte(input)) |byte| : (i += 1) {
@@ -339,7 +339,7 @@ pub fn Scanner(comptime lim: Limits) type {
                     },
 
                     else => blk: {
-                        var needle = [1:0]u8{b} ++ [1:0]u8{0x00} ** (limits.identifier_length - 1);
+                        var needle: [limits.identifier_length:0]u8 = [1:0]u8{b} ++ @as([limits.identifier_length - 1:0]u8, @splat(0x00));
                         const rest = try self.readToWhitespace(limits.identifier_length, input);
 
                         end = Location{ .line = start.line, .c = start.c + std.mem.sliceTo(&rest, 0).len };
@@ -348,7 +348,7 @@ pub fn Scanner(comptime lim: Limits) type {
                             needle[i] = byte;
 
                         if (std.meta.stringToEnum(cpu.opcodes.Opcode, std.mem.sliceTo(&needle, 0))) |opcode| {
-                            break :blk .{ .instruction = .{ .mnemonic = @tagName(opcode), .opcode = @intFromEnum(opcode) } };
+                            break :blk .{ .instruction = .{ .mnemonic = @tagName(opcode), .opcode = @backingInt(opcode) } };
                         } else {
                             const needle_slice = std.mem.sliceTo(&needle, 0);
 

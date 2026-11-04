@@ -20,7 +20,7 @@ pub fn main(init: std.process.Init) !void {
     const output_file_name = args[2];
     const base_dir = Io.Dir.cwd();
 
-    var output_rom: [0x10000]u8 = [1]u8{0x00} ** 0x10000;
+    var output_rom: [0x10000]u8 = @splat(0x00);
 
     const input_file = try base_dir.openFile(io, input_file_name, .{});
     defer input_file.close(io);

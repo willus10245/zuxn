@@ -6,7 +6,7 @@ const Io = std.Io;
 const logger = std.log.scoped(.uxn);
 
 pub const std_options: std.Options = .{
-    .log_level = .debug,
+    .log_level = .info,
 };
 
 fn intercept(ctx: *anyopaque, cpu: *Uxn, port: u8, is_output: bool) void {
@@ -31,7 +31,7 @@ pub fn main(init: std.process.Init) !void {
     // Unbuffered
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &.{});
     const stdout_writer = &stdout_file_writer.interface;
-    var stderr_file_writer: Io.File.Writer = .init(.stdout(), io, &.{});
+    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &.{});
     const stderr_writer = &stderr_file_writer.interface;
 
     var varv = Varvara.init(stdout_writer, stderr_writer);

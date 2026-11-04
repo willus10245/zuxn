@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Translator = @import("translate_c").Translator;
+
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
 // executed by an external runner. The functions in `std.Build` implement a DSL
@@ -21,16 +23,27 @@ pub fn build(b: *std.Build) void {
     // target and optimize options) will be listed when running `zig build --help`
     // in this directory.
 
+    const translate_c = b.dependency("translate_c", .{});
+
+    const c_time: Translator = .init(translate_c, .{
+        .c_source_file = b.path("src/lib/varvara/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const core_mod = b.addModule("uxn-core", .{
         .root_source_file = b.path("src/lib/uxn/lib.zig"),
     });
 
     const varvara_mod = b.addModule("uxn-varvara", .{
         .root_source_file = b.path("src/lib/varvara/lib.zig"),
-        .imports = &.{.{
+        .imports = &.{ .{
             .name = "uxn-core",
             .module = core_mod,
-        }},
+        }, .{
+            .name = "c_time",
+            .module = c_time.mod,
+        } },
     });
 
     const asm_mod = b.addModule("uxn-asm", .{ .root_source_file = b.path("src/lib/asm/lib.zig"), .imports = &.{.{
@@ -98,10 +111,14 @@ pub fn build(b: *std.Build) void {
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cli_cmd.addArgs(args);
-        run_asm_cmd.addArgs(args);
-    }
+    run_cli_cmd.addPassthruArgs();
+    run_asm_cmd.addPassthruArgs();
+
+    const core_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/lib/uxn/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
 
     const asm_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/lib/asm/lib.zig"), .target = target, .optimize = optimize, .imports = &.{.{
         .name = "uxn-core",
@@ -116,6 +133,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // A run step that will run the second test executable.
+    const run_core_tests = b.addRunArtifact(core_tests);
     const run_asm_tests = b.addRunArtifact(asm_tests);
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
@@ -123,6 +141,7 @@ pub fn build(b: *std.Build) void {
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_core_tests.step);
     test_step.dependOn(&run_asm_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 

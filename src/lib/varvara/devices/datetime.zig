@@ -1,9 +1,6 @@
 const std = @import("std");
+const c_time = @import("c_time");
 const Cpu = @import("uxn-core").Uxn;
-
-const ctime = @cImport({
-    @cInclude("time.h");
-});
 
 const logger = std.log.scoped(.uxn_varvara_datetime);
 
@@ -19,8 +16,8 @@ const dst_port: u8 = 0xca;
 
 pub fn intercept(cpu: *Cpu, port: u8, is_output: bool) void {
     if (!is_output) {
-        const now = ctime.time(null);
-        const t = ctime.localtime(&now);
+        const now = c_time.time(null);
+        const t = c_time.localtime(&now);
 
         switch (port) {
             year_port, year_port + 1 => cpu.storeDevice(u16, year_port, @as(u16, @intCast(t.*.tm_year + 1900))),
