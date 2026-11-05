@@ -26,3 +26,7 @@ pub const Varvara = struct {
         }
     }
 };
+
+test {
+    _ = system;
+}

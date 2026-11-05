@@ -29,14 +29,19 @@ pub fn main(init: std.process.Init) !void {
     const stdin = &stdin_file_reader.interface;
 
     // Unbuffered
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &.{});
+    var stdout_file_writer: Io.File.Writer = .initStreaming(.stdout(), io, &.{});
     const stdout_writer = &stdout_file_writer.interface;
-    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &.{});
+    var stderr_file_writer: Io.File.Writer = .initStreaming(.stderr(), io, &.{});
     const stderr_writer = &stderr_file_writer.interface;
+
+    if (args.len < 2) {
+        try stderr_writer.writeAll("usage: zuxncli <rom_path>\n");
+        std.process.exit(1);
+    }
 
     var varv = Varvara.init(stdout_writer, stderr_writer);
 
-    var uxn = Uxn.init();
+    var uxn = Uxn{};
     uxn.intercept_ctx = &varv;
     uxn.intercept_fn = intercept;
 
@@ -54,8 +59,14 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(c);
     }
 
-    while (varv.system_device.exit_code == null) {
-        const byte = stdin.takeByte() catch unreachable;
+    while (varv.system_device.exit_code == null and varv.console_device.hasVector(&uxn)) {
+        const byte = stdin.takeByte() catch |err| switch (err) {
+            error.EndOfStream => {
+                varv.console_device.sendEndOfInput(&uxn);
+                break;
+            },
+            else => return err,
+        };
 
         varv.console_device.readStdinByte(&uxn, byte);
     }

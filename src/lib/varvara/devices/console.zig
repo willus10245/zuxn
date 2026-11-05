@@ -61,4 +61,18 @@ pub const Console = struct {
         if (console_vector > 0x000)
             cpu.runVector(console_vector);
     }
+
+    pub fn hasVector(_: Console, cpu: *Cpu) bool {
+        return cpu.loadDevice(u16, vector_port) > 0;
+    }
+
+    pub fn sendEndOfInput(_: Console, cpu: *Cpu) void {
+        const console_vector = cpu.loadDevice(u16, vector_port);
+
+        cpu.storeDevice(u8, type_port, 0x4);
+        cpu.storeDevice(u8, read_port, 0x00);
+
+        if (console_vector > 0x000)
+            cpu.runVector(console_vector);
+    }
 };

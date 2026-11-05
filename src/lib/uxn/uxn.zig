@@ -103,33 +103,28 @@ pub const Uxn = struct {
     op_sv: StackView = .{ .stack = undefined },
     sec_sv: StackView = .{ .stack = undefined },
 
-    pub fn init() Uxn {
-        var uxn = Uxn{};
-        // uxn.mem = [_]u8{0} ** 0x100 ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 } ++ [_]u8{0} ** 0xFEF6;
-        uxn.mem = @as([0x100]u8, @splat(0)) ++ [_]u8{ 0x80, 0x68, 0x80, 0x18, 0x17, 0x80, 0x0a, 0x80, 0x18, 0x17 } ++ @as([0xFEF6]u8, @splat(0));
-        return uxn;
-    }
-
     fn dumpStacks(self: *Uxn) void {
-        const offset: u8 = 8;
-        var buf: [3 * 8]u8 = undefined;
-        var pos: usize = 0;
+        if (std.log.logEnabled(.debug, .uxn_cpu)) {
+            const offset: u8 = 8;
+            var buf: [3 * 8]u8 = undefined;
+            var pos: usize = 0;
 
-        pos = 0;
-        var wst_i = self.wst.sp -% offset;
-        while (wst_i != self.wst.sp) : (wst_i +%= 1) {
-            const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.wst.data[wst_i]}) catch break;
-            pos += s.len;
-        }
-        logger.debug("WST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.wst.sp });
+            pos = 0;
+            var wst_i = self.wst.sp -% offset;
+            while (wst_i != self.wst.sp) : (wst_i +%= 1) {
+                const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.wst.data[wst_i]}) catch break;
+                pos += s.len;
+            }
+            logger.debug("WST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.wst.sp });
 
-        pos = 0;
-        var rst_i = self.rst.sp -% offset;
-        while (rst_i != self.rst.sp) : (rst_i +%= 1) {
-            const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.rst.data[rst_i]}) catch break;
-            pos += s.len;
+            pos = 0;
+            var rst_i = self.rst.sp -% offset;
+            while (rst_i != self.rst.sp) : (rst_i +%= 1) {
+                const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.rst.data[rst_i]}) catch break;
+                pos += s.len;
+            }
+            logger.debug("RST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.rst.sp });
         }
-        logger.debug("RST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.rst.sp });
     }
 
     pub fn runVector(self: *Uxn, pc: u16) void {
@@ -232,7 +227,9 @@ pub const Uxn = struct {
         if (T == u8) {
             return @field(self, field)[addr];
         } else if (T == u16) {
-            return std.mem.readInt(T, @as(*const [2]u8, @ptrCast(@field(self, field)[addr..addr +| 2])), .big);
+            const msb = @field(self, field)[addr];
+            const lsb = @field(self, field)[addr +% 1];
+            return (@as(u16, msb) << 8) | lsb;
         }
     }
 
@@ -240,7 +237,8 @@ pub const Uxn = struct {
         if (T == u8) {
             @field(self, field)[addr] = val;
         } else if (T == u16) {
-            std.mem.writeInt(T, @as(*[2]u8, @ptrCast(@field(self, field)[addr..addr +| 2])), val, .big);
+            @field(self, field)[addr] = @intCast(val >> 8);
+            @field(self, field)[addr +% 1] = @intCast(val & 0xFF);
         }
     }
 
@@ -266,6 +264,11 @@ pub const Uxn = struct {
 
     pub fn storeDevice(self: *Uxn, comptime T: type, addr: u8, val: T) void {
         self.store(T, "dev", addr, val);
+    }
+
+    fn relativeAddr(self: *const Uxn, offset: u8) u16 {
+        const signed: i8 = @bitCast(offset);
+        return self.pc +% @as(u16, @bitCast(@as(i16, signed)));
     }
 
     fn fetch(self: *Uxn, comptime T: type) T {
@@ -349,9 +352,7 @@ pub const Uxn = struct {
 
         switch (T) {
             u8 => {
-                const offset: i8 = @bitCast(operand);
-                const new_addr: i16 = @as(i16, @bitCast(self.pc)) + offset;
-                self.pc = @bitCast(new_addr);
+                self.pc = self.relativeAddr(operand);
             },
             u16 => self.pc = operand,
             else => unreachable,
@@ -364,9 +365,7 @@ pub const Uxn = struct {
         if (self.op_sv.pop(u8) != 0x00) {
             switch (T) {
                 u8 => {
-                    const offset: i8 = @bitCast(operand);
-                    const new_addr: i16 = @as(i16, @bitCast(self.pc)) + offset;
-                    self.pc = @bitCast(new_addr);
+                    self.pc = self.relativeAddr(operand);
                 },
                 u16 => self.pc = operand,
                 else => unreachable,
@@ -381,9 +380,7 @@ pub const Uxn = struct {
 
         switch (T) {
             u8 => {
-                const offset: i8 = @bitCast(operand);
-                const new_addr: i16 = @as(i16, @bitCast(self.pc)) + offset;
-                self.pc = @bitCast(new_addr);
+                self.pc = self.relativeAddr(operand);
             },
             u16 => self.pc = operand,
             else => unreachable,
@@ -408,17 +405,15 @@ pub const Uxn = struct {
     }
 
     fn op_ldr(self: *Uxn, comptime T: type) void {
-        const offset: i8 = @bitCast(self.op_sv.pop(u8));
-        const addr: i16 = @as(i16, @bitCast(self.pc)) + offset;
-        const val = self.loadMem(T, @bitCast(addr));
+        const addr = self.relativeAddr(self.op_sv.pop(u8));
+        const val = self.loadMem(T, addr);
         self.op_sv.push(T, val);
     }
 
     fn op_str(self: *Uxn, comptime T: type) void {
-        const offset: i8 = @bitCast(self.op_sv.pop(u8));
-        const addr: i16 = @as(i16, @bitCast(self.pc)) + offset;
+        const addr = self.relativeAddr(self.op_sv.pop(u8));
         const val = self.op_sv.pop(T);
-        self.storeMem(T, @bitCast(addr), val);
+        self.storeMem(T, addr, val);
     }
 
     fn op_lda(self: *Uxn, comptime T: type) void {
@@ -437,6 +432,9 @@ pub const Uxn = struct {
         const dev_addr = self.op_sv.pop(u8);
         if (self.intercept_fn) |f| {
             f(self.intercept_ctx, self, dev_addr, false);
+            if (T == u16) {
+                f(self.intercept_ctx, self, dev_addr +% 1, false);
+            }
         }
         const val = self.loadDevice(T, dev_addr);
         self.op_sv.push(T, val);
@@ -448,6 +446,9 @@ pub const Uxn = struct {
         self.storeDevice(T, dev_addr, val);
         if (self.intercept_fn) |f| {
             f(self.intercept_ctx, self, dev_addr, true);
+            if (T == u16) {
+                f(self.intercept_ctx, self, dev_addr +% 1, true);
+            }
         }
     }
 
@@ -494,12 +495,11 @@ pub const Uxn = struct {
     }
 
     fn op_sft(self: *Uxn, comptime T: type) void {
-        const b = self.op_sv.pop(T);
+        const b = self.op_sv.pop(u8);
         const a = self.op_sv.pop(T);
-        const ShiftT = std.math.Log2Int(T);
-        const lsft: ShiftT = @truncate(b >> 4);
-        const rsft: ShiftT = @truncate(b & 0xF);
-        self.op_sv.push(T, (a >> rsft) << lsft);
+        const lsft: u4 = @truncate(b >> 4);
+        const rsft: u4 = @truncate(b & 0xF);
+        self.op_sv.push(T, @truncate((@as(u32, a) >> rsft) << lsft));
     }
 
     fn op_lit(self: *Uxn, comptime T: type) void {
@@ -576,4 +576,165 @@ test "SFT shifts right then left" {
     // #34 #12 SFT: right by 2 gives 0d, then left by 1 gives 1a
     const uxn = runProgram(&.{ 0x80, 0x34, 0x80, 0x12, 0x1f });
     try expectStacks(&uxn, &.{0x1a}, &.{});
+}
+
+test "SFT2 uses a one byte shift" {
+    // #1234 #10 SFT2: the shift is a byte even in short mode,
+    // so 1234 shifts left by 1 to give 2468
+    const uxn = runProgram(&.{ 0xa0, 0x12, 0x34, 0x80, 0x10, 0x3f });
+    try expectStacks(&uxn, &.{ 0x24, 0x68 }, &.{});
+}
+
+test "SFT clears a byte when shifting right by 8 or more" {
+    // #ff #08 SFT
+    const uxn = runProgram(&.{ 0x80, 0xff, 0x80, 0x08, 0x1f });
+    try expectStacks(&uxn, &.{0x00}, &.{});
+}
+
+test "SFT clears a byte when shifting left by 8 or more" {
+    // #ff #80 SFT
+    const uxn = runProgram(&.{ 0x80, 0xff, 0x80, 0x80, 0x1f });
+    try expectStacks(&uxn, &.{0x00}, &.{});
+}
+
+test "SFT2 shifts a short left by up to 15" {
+    // #ffff #f0 SFT2
+    const uxn = runProgram(&.{ 0xa0, 0xff, 0xff, 0x80, 0xf0, 0x3f });
+    try expectStacks(&uxn, &.{ 0x80, 0x00 }, &.{});
+}
+
+test "SFT2k keeps the short and the one byte shift" {
+    // #1234 #10 SFT2k
+    const uxn = runProgram(&.{ 0xa0, 0x12, 0x34, 0x80, 0x10, 0xbf });
+    try expectStacks(&uxn, &.{ 0x12, 0x34, 0x10, 0x24, 0x68 }, &.{});
+}
+
+test "LDA2 wraps around the end of memory" {
+    // #ffff LDA2
+    var uxn = Uxn{};
+    const program = [_]u8{ 0xa0, 0xff, 0xff, 0x34 };
+    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    uxn.mem[0xffff] = 0xab;
+    uxn.mem[0x0000] = 0xcd;
+    uxn.runVector(0x0100);
+    try expectStacks(&uxn, &.{ 0xab, 0xcd }, &.{});
+}
+
+test "STA2 wraps around the end of memory" {
+    // #abcd #ffff STA2
+    const uxn = runProgram(&.{ 0xa0, 0xab, 0xcd, 0xa0, 0xff, 0xff, 0x35 });
+    try testing.expectEqual(0xab, uxn.mem[0xffff]);
+    try testing.expectEqual(0xcd, uxn.mem[0x0000]);
+}
+
+/// Intercept handler that records each port it sees. On input it writes the
+/// port number to that port, so a test can tell the device updated it.
+const PortRecorder = struct {
+    ports: [4]u8 = undefined,
+    len: usize = 0,
+
+    fn intercept(ctx: *anyopaque, uxn: *Uxn, port: u8, is_output: bool) void {
+        const self: *PortRecorder = @ptrCast(@alignCast(ctx));
+        self.ports[self.len] = port;
+        self.len += 1;
+        if (!is_output) uxn.dev[port] = port;
+    }
+
+    fn seen(self: *const PortRecorder) []const u8 {
+        return self.ports[0..self.len];
+    }
+};
+
+/// Runs `program` from 0x0100 with `recorder` attached as the intercept handler.
+fn runRecorded(uxn: *Uxn, recorder: *PortRecorder, program: []const u8) void {
+    @memcpy(uxn.mem[0x0100..][0..program.len], program);
+    uxn.intercept_ctx = recorder;
+    uxn.intercept_fn = PortRecorder.intercept;
+    uxn.runVector(0x0100);
+}
+
+test "DEI2 intercepts both ports in order before reading them" {
+    // #c4 DEI2
+    var uxn = Uxn{};
+    var recorder = PortRecorder{};
+    runRecorded(&uxn, &recorder, &.{ 0x80, 0xc4, 0x36 });
+    try testing.expectEqualSlices(u8, &.{ 0xc4, 0xc5 }, recorder.seen());
+    try expectStacks(&uxn, &.{ 0xc4, 0xc5 }, &.{});
+}
+
+test "DEO2 stores both bytes and intercepts both ports in order" {
+    // #1234 #c4 DEO2
+    var uxn = Uxn{};
+    var recorder = PortRecorder{};
+    runRecorded(&uxn, &recorder, &.{ 0xa0, 0x12, 0x34, 0x80, 0xc4, 0x37 });
+    try testing.expectEqualSlices(u8, &.{ 0xc4, 0xc5 }, recorder.seen());
+    try testing.expectEqual(0x12, uxn.dev[0xc4]);
+    try testing.expectEqual(0x34, uxn.dev[0xc5]);
+    try expectStacks(&uxn, &.{}, &.{});
+}
+
+test "DEI2 on port ff wraps to port 00" {
+    // #ff DEI2
+    var uxn = Uxn{};
+    var recorder = PortRecorder{};
+    runRecorded(&uxn, &recorder, &.{ 0x80, 0xff, 0x36 });
+    try testing.expectEqualSlices(u8, &.{ 0xff, 0x00 }, recorder.seen());
+    try expectStacks(&uxn, &.{ 0xff, 0x00 }, &.{});
+}
+
+test "DEO2 on port ff wraps to port 00" {
+    // #1234 #ff DEO2
+    var uxn = Uxn{};
+    var recorder = PortRecorder{};
+    runRecorded(&uxn, &recorder, &.{ 0xa0, 0x12, 0x34, 0x80, 0xff, 0x37 });
+    try testing.expectEqualSlices(u8, &.{ 0xff, 0x00 }, recorder.seen());
+    try testing.expectEqual(0x12, uxn.dev[0xff]);
+    try testing.expectEqual(0x34, uxn.dev[0x00]);
+}
+
+test "LDZ2 wraps around the end of the zero page" {
+    // #ab #ff STZ #cd #00 STZ #ff LDZ2
+    const uxn = runProgram(&.{
+        0x80, 0xab, 0x80, 0xff, 0x11,
+        0x80, 0xcd, 0x80, 0x00, 0x11,
+        0x80, 0xff, 0x30,
+    });
+    try expectStacks(&uxn, &.{ 0xab, 0xcd }, &.{});
+}
+
+test "STZ2 wraps around the end of the zero page" {
+    // #abcd #ff STZ2
+    const uxn = runProgram(&.{ 0xa0, 0xab, 0xcd, 0x80, 0xff, 0x31 });
+    try testing.expectEqual(0xab, uxn.mem[0xff]);
+    try testing.expectEqual(0xcd, uxn.mem[0x00]);
+}
+
+test "forward jump with relative addressing wraps correctly around the midpoint of memory" {
+    var uxn = Uxn{};
+    const part1 = [_]u8{ 0x80, 0x01, 0x0c };
+    const part2 = [_]u8{ 0x80, 0x2a };
+    @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
+    @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
+    uxn.runVector(0x7ffc);
+    try expectStacks(&uxn, &.{0x2a}, &.{});
+}
+
+test "backward jump with relative addressing wraps correctly around the midpoint of memory" {
+    var uxn = Uxn{};
+    const part1 = [_]u8{ 0x80, 0x2a, 0x00 };
+    const part2 = [_]u8{ 0x80, 0xf9, 0x0c };
+    @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
+    @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
+    uxn.runVector(0x8000);
+    try expectStacks(&uxn, &.{0x2a}, &.{});
+}
+
+test "load with relative addressing wraps correctly around the midpoint of memory" {
+    var uxn = Uxn{};
+    const part1 = [_]u8{ 0x80, 0x01, 0x12 };
+    const part2 = [_]u8{0x2a};
+    @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
+    @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
+    uxn.runVector(0x7ffc);
+    try expectStacks(&uxn, &.{0x2a}, &.{});
 }

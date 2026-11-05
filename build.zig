@@ -125,6 +125,19 @@ pub fn build(b: *std.Build) void {
         .module = core_mod,
     }} }) });
 
+    const varvara_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/lib/varvara/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{
+            .name = "uxn-core",
+            .module = core_mod,
+        }, .{
+            .name = "c_time",
+            .module = c_time.mod,
+        } },
+    }) });
+
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
@@ -135,6 +148,7 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_core_tests = b.addRunArtifact(core_tests);
     const run_asm_tests = b.addRunArtifact(asm_tests);
+    const run_varvara_tests = b.addRunArtifact(varvara_tests);
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     // A top level step for running all tests. dependOn can be called multiple
@@ -143,6 +157,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_core_tests.step);
     test_step.dependOn(&run_asm_tests.step);
+    test_step.dependOn(&run_varvara_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.

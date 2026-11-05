@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(arena);
     const io = init.io;
 
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &.{});
+    var stdout_file_writer: Io.File.Writer = .initStreaming(.stdout(), io, &.{});
     const stdout_writer = &stdout_file_writer.interface;
 
     const input_file_name = args[1];

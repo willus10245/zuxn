@@ -33,9 +33,9 @@ pub const System = struct {
         const shift = @as(u4, 3 - color_idx) * 4;
 
         return Color{
-            .r = @truncate((r_byte >> shift) & 0xf | ((r_byte >> shift) | 0xf) << 4),
-            .g = @truncate((g_byte >> shift) & 0xf | ((r_byte >> shift) | 0xf) << 4),
-            .b = @truncate((b_byte >> shift) & 0xf | ((b_byte >> shift) | 0xf) << 4),
+            .r = @truncate((r_byte >> shift) & 0xf | ((r_byte >> shift) & 0xf) << 4),
+            .g = @truncate((g_byte >> shift) & 0xf | ((g_byte >> shift) & 0xf) << 4),
+            .b = @truncate((b_byte >> shift) & 0xf | ((b_byte >> shift) & 0xf) << 4),
         };
     }
 
@@ -57,7 +57,9 @@ pub const System = struct {
 
                 state_port => {
                     const state = cpu.loadDevice(u8, state_port);
-                    self.exit_code = state & 0x7f;
+                    if (state > 0x00) {
+                        self.exit_code = state & 0x7f;
+                    }
                 },
 
                 else => {},
@@ -72,3 +74,14 @@ pub const System = struct {
         }
     }
 };
+
+test "parseColor doubles each channel's nibble for the chosen color" {
+    const r: u16 = 0x1234;
+    const g: u16 = 0x5678;
+    const b: u16 = 0x9abc;
+
+    try std.testing.expectEqual(Color{ .r = 0x11, .g = 0x55, .b = 0x99 }, System.parseColor(r, g, b, 0));
+    try std.testing.expectEqual(Color{ .r = 0x22, .g = 0x66, .b = 0xaa }, System.parseColor(r, g, b, 1));
+    try std.testing.expectEqual(Color{ .r = 0x33, .g = 0x77, .b = 0xbb }, System.parseColor(r, g, b, 2));
+    try std.testing.expectEqual(Color{ .r = 0x44, .g = 0x88, .b = 0xcc }, System.parseColor(r, g, b, 3));
+}
