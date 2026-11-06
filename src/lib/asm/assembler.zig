@@ -306,6 +306,8 @@ pub fn Assembler(comptime lim: scan.Limits) type {
                             },
                         }
                     }
+                } else {
+                    return AssemblerError.UndefinedLabel;
                 }
             }
         }

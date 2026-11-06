@@ -320,6 +320,8 @@ pub fn Scanner(comptime lim: Limits) type {
                         while (self.readByte(input)) |byte| : (i += 1) {
                             if (ascii.isWhitespace(byte)) break;
 
+                            if (i >= limits.word_length) return ScanError.IdentifierTooLong;
+
                             word[i] = byte;
                         }
 
