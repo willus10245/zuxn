@@ -55,6 +55,13 @@ pub const System = struct {
                     }
                 },
 
+                debug_port => {
+                    const debug_byte = cpu.loadDevice(u8, debug_port);
+                    if (debug_byte & 0x01 > 0x00) {
+                        cpu.dumpStacks();
+                    }
+                },
+
                 state_port => {
                     const state = cpu.loadDevice(u8, state_port);
                     if (state > 0x00) {

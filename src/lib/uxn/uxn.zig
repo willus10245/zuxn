@@ -103,28 +103,26 @@ pub const Uxn = struct {
     op_sv: StackView = .{ .stack = undefined },
     sec_sv: StackView = .{ .stack = undefined },
 
-    fn dumpStacks(self: *Uxn) void {
-        if (std.log.logEnabled(.debug, .uxn_cpu)) {
-            const offset: u8 = 8;
-            var buf: [3 * 8]u8 = undefined;
-            var pos: usize = 0;
+    pub fn dumpStacks(self: *Uxn) void {
+        const offset: u8 = 8;
+        var buf: [3 * 8]u8 = undefined;
+        var pos: usize = 0;
 
-            pos = 0;
-            var wst_i = self.wst.sp -% offset;
-            while (wst_i != self.wst.sp) : (wst_i +%= 1) {
-                const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.wst.data[wst_i]}) catch break;
-                pos += s.len;
-            }
-            logger.debug("WST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.wst.sp });
-
-            pos = 0;
-            var rst_i = self.rst.sp -% offset;
-            while (rst_i != self.rst.sp) : (rst_i +%= 1) {
-                const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.rst.data[rst_i]}) catch break;
-                pos += s.len;
-            }
-            logger.debug("RST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.rst.sp });
+        pos = 0;
+        var wst_i = self.wst.sp -% offset;
+        while (wst_i != self.wst.sp) : (wst_i +%= 1) {
+            const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.wst.data[wst_i]}) catch break;
+            pos += s.len;
         }
+        logger.debug("WST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.wst.sp });
+
+        pos = 0;
+        var rst_i = self.rst.sp -% offset;
+        while (rst_i != self.rst.sp) : (rst_i +%= 1) {
+            const s = std.fmt.bufPrint(buf[pos..], "{x:0>2} ", .{self.rst.data[rst_i]}) catch break;
+            pos += s.len;
+        }
+        logger.debug("RST [{s}] sp={d}", .{ std.mem.trimEnd(u8, buf[0..pos], " "), self.rst.sp });
     }
 
     pub fn runVector(self: *Uxn, pc: u16) void {
@@ -139,7 +137,9 @@ pub const Uxn = struct {
 
         while (Opcode.fromByte(self.mem[self.pc]) != .BRK) {
             const op = Opcode.fromByte(self.mem[self.pc]);
-            self.dumpStacks();
+            if (std.log.logEnabled(.debug, .uxn_cpu)) {
+                self.dumpStacks();
+            }
             logger.debug("PC {x:0>4}: executing {s}", .{ self.pc, op.mnemonic() });
             self.pc +%= 1;
 
