@@ -16,6 +16,13 @@ pub fn main(init: std.process.Init) !void {
     var stdout_file_writer: Io.File.Writer = .initStreaming(.stdout(), io, &.{});
     const stdout_writer = &stdout_file_writer.interface;
 
+    if (args.len != 3) {
+        var stderr_file_writer: Io.File.Writer = .initStreaming(.stderr(), io, &.{});
+        const stderr_writer = &stderr_file_writer.interface;
+        try stderr_writer.writeAll("usage: zuxnasm <input_path> <output_path>\n");
+        std.process.exit(1);
+    }
+
     const input_file_name = args[1];
     const output_file_name = args[2];
     const base_dir = Io.Dir.cwd();

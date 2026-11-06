@@ -88,6 +88,10 @@ pub const StackView = struct {
             return self.stack.pop(T);
         }
     }
+
+    pub fn drop(self: *StackView, comptime T: type) void {
+        if (!self.keep) self.stack.sp -%= @sizeOf(T);
+    }
 };
 
 pub const Uxn = struct {
@@ -429,7 +433,7 @@ pub const Uxn = struct {
     }
 
     fn op_dei(self: *Uxn, comptime T: type) void {
-        const dev_addr = self.op_sv.pop(u8);
+        const dev_addr = self.op_sv.stack.peek(u8);
         if (self.intercept_fn) |f| {
             f(self.intercept_ctx, self, dev_addr, false);
             if (T == u16) {
@@ -437,6 +441,7 @@ pub const Uxn = struct {
             }
         }
         const val = self.loadDevice(T, dev_addr);
+        self.op_sv.drop(u8);
         self.op_sv.push(T, val);
     }
 
@@ -690,6 +695,61 @@ test "DEO2 on port ff wraps to port 00" {
     try testing.expectEqualSlices(u8, &.{ 0xff, 0x00 }, recorder.seen());
     try testing.expectEqual(0x12, uxn.dev[0xff]);
     try testing.expectEqual(0x34, uxn.dev[0x00]);
+}
+
+const SpRecorder = struct {
+    wst_sp: u8 = 0,
+    rst_sp: u8 = 0,
+
+    fn intercept(ctx: *anyopaque, uxn: *Uxn, port: u8, is_output: bool) void {
+        _ = port;
+        _ = is_output;
+        const self: *SpRecorder = @ptrCast(@alignCast(ctx));
+        self.wst_sp = uxn.wst.sp;
+        self.rst_sp = uxn.rst.sp;
+    }
+};
+
+test "DEI intercept runs before port is popped" {
+    // #12 #34 DEI
+    var uxn = Uxn{};
+    var recorder = SpRecorder{};
+    const program = [_]u8{ 0x80, 0x12, 0x80, 0x34, 0x16 };
+    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    uxn.intercept_ctx = &recorder;
+    uxn.intercept_fn = SpRecorder.intercept;
+    uxn.runVector(0x0100);
+
+    try testing.expectEqual(2, recorder.wst_sp);
+    try expectStacks(&uxn, &.{ 0x12, 0x00 }, &.{});
+}
+
+test "DEIr intercept runs before port is popped" {
+    // LITr 12 LITr 34 DEIr
+    var uxn = Uxn{};
+    var recorder = SpRecorder{};
+    const program = [_]u8{ 0xc0, 0x12, 0xc0, 0x34, 0x56 };
+    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    uxn.intercept_ctx = &recorder;
+    uxn.intercept_fn = SpRecorder.intercept;
+    uxn.runVector(0x0100);
+
+    try testing.expectEqual(2, recorder.rst_sp);
+    try expectStacks(&uxn, &.{}, &.{ 0x12, 0x00 });
+}
+
+test "DEIk intercept runs before port is popped" {
+    // #12 #34 DEIk
+    var uxn = Uxn{};
+    var recorder = SpRecorder{};
+    const program = [_]u8{ 0x80, 0x12, 0x80, 0x34, 0x96 };
+    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    uxn.intercept_ctx = &recorder;
+    uxn.intercept_fn = SpRecorder.intercept;
+    uxn.runVector(0x0100);
+
+    try testing.expectEqual(2, recorder.wst_sp);
+    try expectStacks(&uxn, &.{ 0x12, 0x34, 0x00 }, &.{});
 }
 
 test "LDZ2 wraps around the end of the zero page" {
