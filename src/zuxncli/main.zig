@@ -1,7 +1,8 @@
 const std = @import("std");
-const Uxn = @import("uxn-core").Uxn;
+const uxn = @import("uxn-core");
 const Varvara = @import("uxn-varvara").Varvara;
 const Io = std.Io;
+const Uxn = uxn.Uxn;
 
 const logger = std.log.scoped(.uxn);
 
@@ -39,36 +40,43 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    var varv = Varvara.init(stdout_writer, stderr_writer);
-
-    var uxn = Uxn{};
-    uxn.intercept_ctx = &varv;
-    uxn.intercept_fn = intercept;
-
     const rom_path = args[1];
-    _ = try std.Io.Dir.cwd().readFile(io, rom_path, uxn.mem[uxn.pc..]);
+    var input_file_buffer: [1024]u8 = undefined;
+    var input_file = try std.Io.Dir.cwd().openFile(io, rom_path, .{});
+    var input_file_reader = input_file.reader(io, &input_file_buffer);
+
+    defer input_file.close(io);
 
     const rom_args: [][]const u8 = @ptrCast(@constCast(args[2..]));
-    varv.console_device.setArgc(&uxn, rom_args);
 
-    uxn.runVector(0x0100);
+    var varv = Varvara.init(stdout_writer, stderr_writer);
 
-    varv.console_device.readArguments(&uxn, rom_args);
+    const ram = try uxn.loadRom(arena, &input_file_reader.interface);
+
+    var cpu = Uxn.init(ram);
+    cpu.intercept_ctx = &varv;
+    cpu.intercept_fn = intercept;
+
+    varv.console_device.setArgc(&cpu, rom_args);
+
+    cpu.runVector(0x0100);
+
+    varv.console_device.readArguments(&cpu, rom_args);
 
     if (varv.system_device.exit_code) |c| {
         std.process.exit(c);
     }
 
-    while (varv.system_device.exit_code == null and varv.console_device.hasVector(&uxn)) {
+    while (varv.system_device.exit_code == null and varv.console_device.hasVector(&cpu)) {
         const byte = stdin.takeByte() catch |err| switch (err) {
             error.EndOfStream => {
-                varv.console_device.sendEndOfInput(&uxn);
+                varv.console_device.sendEndOfInput(&cpu);
                 break;
             },
             else => return err,
         };
 
-        varv.console_device.readStdinByte(&uxn, byte);
+        varv.console_device.readStdinByte(&cpu, byte);
     }
 
     std.process.exit(varv.system_device.exit_code orelse 0);

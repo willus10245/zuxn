@@ -94,18 +94,30 @@ pub const StackView = struct {
     }
 };
 
+pub const page_count = 0x10;
+pub const page_size = 0x10000; // 64kb
+pub const device_page_size = 0x100;
+
 pub const Uxn = struct {
-    mem: [0x10000]u8 = @splat(0), // 64kb
-    dev: [0x100]u8 = @splat(0),
-    wst: Stack = Stack{},
-    rst: Stack = Stack{},
-    pc: u16 = 0x0100,
+    pages: [][page_size]u8,
+    mem: *[page_size]u8,
+    dev: [device_page_size]u8,
+    wst: Stack,
+    rst: Stack,
+    pc: u16,
 
     intercept_ctx: *anyopaque = undefined,
     intercept_fn: ?*const fn (ctx: *anyopaque, uxn: *Uxn, port: u8, is_ouput: bool) void = null,
 
-    op_sv: StackView = .{ .stack = undefined },
-    sec_sv: StackView = .{ .stack = undefined },
+    op_sv: StackView,
+    sec_sv: StackView,
+
+    pub fn init(ram: []u8) Uxn {
+        // ensure ram divides into full pages
+        std.debug.assert(ram.len >= page_size and ram.len % page_size == 0);
+
+        return Uxn{ .pages = @ptrCast(ram), .mem = @ptrCast(ram), .dev = @splat(0x00), .wst = Stack{}, .rst = Stack{}, .pc = 0x100, .op_sv = .{ .stack = undefined }, .sec_sv = .{ .stack = undefined } };
+    }
 
     pub fn dumpStacks(self: *Uxn) void {
         const offset: u8 = 8;
@@ -514,12 +526,14 @@ pub const Uxn = struct {
 
 const testing = std.testing;
 
+fn load(uxn: *Uxn, addr: u16, bytes: []const u8) void {
+    @memcpy(uxn.mem[addr..][0..bytes.len], bytes);
+}
+
 /// Loads `program` at 0x0100 into zeroed memory and runs it until BRK.
-fn runProgram(program: []const u8) Uxn {
-    var uxn = Uxn{};
-    @memcpy(uxn.mem[0x0100..][0..program.len], program);
+fn runProgram(uxn: *Uxn, program: []const u8) void {
+    load(uxn, 0x0100, program);
     uxn.runVector(0x0100);
-    return uxn;
 }
 
 /// Checks both stacks, listed from the bottom of the stack to the top.
@@ -530,95 +544,124 @@ fn expectStacks(uxn: *const Uxn, wst: []const u8, rst: []const u8) !void {
 
 test "ADD adds bytes" {
     // #01 #02 ADD
-    const uxn = runProgram(&.{ 0x80, 0x01, 0x80, 0x02, 0x18 });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0x01, 0x80, 0x02, 0x18 });
     try expectStacks(&uxn, &.{0x03}, &.{});
 }
 
 test "short mode operates on two bytes" {
     // #1234 #0001 ADD2
-    const uxn = runProgram(&.{ 0xa0, 0x12, 0x34, 0xa0, 0x00, 0x01, 0x38 });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0xa0, 0x12, 0x34, 0xa0, 0x00, 0x01, 0x38 });
     try expectStacks(&uxn, &.{ 0x12, 0x35 }, &.{});
 }
 
 test "keep mode leaves operands on the stack" {
     // #01 #02 ADDk
-    const uxn = runProgram(&.{ 0x80, 0x01, 0x80, 0x02, 0x98 });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0x01, 0x80, 0x02, 0x98 });
     try expectStacks(&uxn, &.{ 0x01, 0x02, 0x03 }, &.{});
 }
 
 test "return mode operates on the return stack" {
     // LITr 05 INCr
-    const uxn = runProgram(&.{ 0xc0, 0x05, 0x41 });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0xc0, 0x05, 0x41 });
     try expectStacks(&uxn, &.{}, &.{0x06});
 }
 
 test "STH moves a value to the other stack" {
     // #07 STH
-    const uxn = runProgram(&.{ 0x80, 0x07, 0x0f });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0x07, 0x0f });
     try expectStacks(&uxn, &.{}, &.{0x07});
 }
 
 test "JSI pushes the return address and jumps" {
     // JSI +0001, BRK, #2a
-    const uxn = runProgram(&.{ 0x60, 0x00, 0x01, 0x00, 0x80, 0x2a });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x60, 0x00, 0x01, 0x00, 0x80, 0x2a });
     try expectStacks(&uxn, &.{0x2a}, &.{ 0x01, 0x03 });
 }
 
 test "STZ and LDZ round trip through the zero page" {
     // #aa #10 STZ #10 LDZ
-    const uxn = runProgram(&.{ 0x80, 0xaa, 0x80, 0x10, 0x11, 0x80, 0x10, 0x10 });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0xaa, 0x80, 0x10, 0x11, 0x80, 0x10, 0x10 });
     try testing.expectEqual(0xaa, uxn.mem[0x10]);
     try expectStacks(&uxn, &.{0xaa}, &.{});
 }
 
 test "DIV by zero gives zero" {
     // #05 #00 DIV
-    const uxn = runProgram(&.{ 0x80, 0x05, 0x80, 0x00, 0x1b });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0x05, 0x80, 0x00, 0x1b });
     try expectStacks(&uxn, &.{0x00}, &.{});
 }
 
 test "SFT shifts right then left" {
     // #34 #12 SFT: right by 2 gives 0d, then left by 1 gives 1a
-    const uxn = runProgram(&.{ 0x80, 0x34, 0x80, 0x12, 0x1f });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0x34, 0x80, 0x12, 0x1f });
     try expectStacks(&uxn, &.{0x1a}, &.{});
 }
 
 test "SFT2 uses a one byte shift" {
     // #1234 #10 SFT2: the shift is a byte even in short mode,
     // so 1234 shifts left by 1 to give 2468
-    const uxn = runProgram(&.{ 0xa0, 0x12, 0x34, 0x80, 0x10, 0x3f });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0xa0, 0x12, 0x34, 0x80, 0x10, 0x3f });
     try expectStacks(&uxn, &.{ 0x24, 0x68 }, &.{});
 }
 
 test "SFT clears a byte when shifting right by 8 or more" {
     // #ff #08 SFT
-    const uxn = runProgram(&.{ 0x80, 0xff, 0x80, 0x08, 0x1f });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0xff, 0x80, 0x08, 0x1f });
     try expectStacks(&uxn, &.{0x00}, &.{});
 }
 
 test "SFT clears a byte when shifting left by 8 or more" {
     // #ff #80 SFT
-    const uxn = runProgram(&.{ 0x80, 0xff, 0x80, 0x80, 0x1f });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0x80, 0xff, 0x80, 0x80, 0x1f });
     try expectStacks(&uxn, &.{0x00}, &.{});
 }
 
 test "SFT2 shifts a short left by up to 15" {
     // #ffff #f0 SFT2
-    const uxn = runProgram(&.{ 0xa0, 0xff, 0xff, 0x80, 0xf0, 0x3f });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0xa0, 0xff, 0xff, 0x80, 0xf0, 0x3f });
     try expectStacks(&uxn, &.{ 0x80, 0x00 }, &.{});
 }
 
 test "SFT2k keeps the short and the one byte shift" {
     // #1234 #10 SFT2k
-    const uxn = runProgram(&.{ 0xa0, 0x12, 0x34, 0x80, 0x10, 0xbf });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0xa0, 0x12, 0x34, 0x80, 0x10, 0xbf });
     try expectStacks(&uxn, &.{ 0x12, 0x34, 0x10, 0x24, 0x68 }, &.{});
 }
 
 test "LDA2 wraps around the end of memory" {
     // #ffff LDA2
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     const program = [_]u8{ 0xa0, 0xff, 0xff, 0x34 };
-    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    load(&uxn, 0x0100, &program);
     uxn.mem[0xffff] = 0xab;
     uxn.mem[0x0000] = 0xcd;
     uxn.runVector(0x0100);
@@ -627,7 +670,9 @@ test "LDA2 wraps around the end of memory" {
 
 test "STA2 wraps around the end of memory" {
     // #abcd #ffff STA2
-    const uxn = runProgram(&.{ 0xa0, 0xab, 0xcd, 0xa0, 0xff, 0xff, 0x35 });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0xa0, 0xab, 0xcd, 0xa0, 0xff, 0xff, 0x35 });
     try testing.expectEqual(0xab, uxn.mem[0xffff]);
     try testing.expectEqual(0xcd, uxn.mem[0x0000]);
 }
@@ -652,15 +697,15 @@ const PortRecorder = struct {
 
 /// Runs `program` from 0x0100 with `recorder` attached as the intercept handler.
 fn runRecorded(uxn: *Uxn, recorder: *PortRecorder, program: []const u8) void {
-    @memcpy(uxn.mem[0x0100..][0..program.len], program);
     uxn.intercept_ctx = recorder;
     uxn.intercept_fn = PortRecorder.intercept;
-    uxn.runVector(0x0100);
+    runProgram(uxn, program);
 }
 
 test "DEI2 intercepts both ports in order before reading them" {
     // #c4 DEI2
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     var recorder = PortRecorder{};
     runRecorded(&uxn, &recorder, &.{ 0x80, 0xc4, 0x36 });
     try testing.expectEqualSlices(u8, &.{ 0xc4, 0xc5 }, recorder.seen());
@@ -669,7 +714,8 @@ test "DEI2 intercepts both ports in order before reading them" {
 
 test "DEO2 stores both bytes and intercepts both ports in order" {
     // #1234 #c4 DEO2
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     var recorder = PortRecorder{};
     runRecorded(&uxn, &recorder, &.{ 0xa0, 0x12, 0x34, 0x80, 0xc4, 0x37 });
     try testing.expectEqualSlices(u8, &.{ 0xc4, 0xc5 }, recorder.seen());
@@ -680,7 +726,8 @@ test "DEO2 stores both bytes and intercepts both ports in order" {
 
 test "DEI2 on port ff wraps to port 00" {
     // #ff DEI2
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     var recorder = PortRecorder{};
     runRecorded(&uxn, &recorder, &.{ 0x80, 0xff, 0x36 });
     try testing.expectEqualSlices(u8, &.{ 0xff, 0x00 }, recorder.seen());
@@ -689,7 +736,8 @@ test "DEI2 on port ff wraps to port 00" {
 
 test "DEO2 on port ff wraps to port 00" {
     // #1234 #ff DEO2
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     var recorder = PortRecorder{};
     runRecorded(&uxn, &recorder, &.{ 0xa0, 0x12, 0x34, 0x80, 0xff, 0x37 });
     try testing.expectEqualSlices(u8, &.{ 0xff, 0x00 }, recorder.seen());
@@ -712,10 +760,11 @@ const SpRecorder = struct {
 
 test "DEI intercept runs before port is popped" {
     // #12 #34 DEI
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     var recorder = SpRecorder{};
     const program = [_]u8{ 0x80, 0x12, 0x80, 0x34, 0x16 };
-    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    load(&uxn, 0x0100, &program);
     uxn.intercept_ctx = &recorder;
     uxn.intercept_fn = SpRecorder.intercept;
     uxn.runVector(0x0100);
@@ -726,10 +775,11 @@ test "DEI intercept runs before port is popped" {
 
 test "DEIr intercept runs before port is popped" {
     // LITr 12 LITr 34 DEIr
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     var recorder = SpRecorder{};
     const program = [_]u8{ 0xc0, 0x12, 0xc0, 0x34, 0x56 };
-    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    load(&uxn, 0x0100, &program);
     uxn.intercept_ctx = &recorder;
     uxn.intercept_fn = SpRecorder.intercept;
     uxn.runVector(0x0100);
@@ -740,10 +790,11 @@ test "DEIr intercept runs before port is popped" {
 
 test "DEIk intercept runs before port is popped" {
     // #12 #34 DEIk
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     var recorder = SpRecorder{};
     const program = [_]u8{ 0x80, 0x12, 0x80, 0x34, 0x96 };
-    @memcpy(uxn.mem[0x0100..][0..program.len], &program);
+    load(&uxn, 0x0100, &program);
     uxn.intercept_ctx = &recorder;
     uxn.intercept_fn = SpRecorder.intercept;
     uxn.runVector(0x0100);
@@ -754,7 +805,9 @@ test "DEIk intercept runs before port is popped" {
 
 test "LDZ2 wraps around the end of the zero page" {
     // #ab #ff STZ #cd #00 STZ #ff LDZ2
-    const uxn = runProgram(&.{
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{
         0x80, 0xab, 0x80, 0xff, 0x11,
         0x80, 0xcd, 0x80, 0x00, 0x11,
         0x80, 0xff, 0x30,
@@ -764,37 +817,48 @@ test "LDZ2 wraps around the end of the zero page" {
 
 test "STZ2 wraps around the end of the zero page" {
     // #abcd #ff STZ2
-    const uxn = runProgram(&.{ 0xa0, 0xab, 0xcd, 0x80, 0xff, 0x31 });
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
+    runProgram(&uxn, &.{ 0xa0, 0xab, 0xcd, 0x80, 0xff, 0x31 });
     try testing.expectEqual(0xab, uxn.mem[0xff]);
     try testing.expectEqual(0xcd, uxn.mem[0x00]);
 }
 
 test "forward jump with relative addressing wraps correctly around the midpoint of memory" {
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     const part1 = [_]u8{ 0x80, 0x01, 0x0c };
     const part2 = [_]u8{ 0x80, 0x2a };
-    @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
-    @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
+    load(&uxn, 0x7ffc, &part1);
+    load(&uxn, 0x8000, &part2);
+    // @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
+    // @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
     uxn.runVector(0x7ffc);
     try expectStacks(&uxn, &.{0x2a}, &.{});
 }
 
 test "backward jump with relative addressing wraps correctly around the midpoint of memory" {
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     const part1 = [_]u8{ 0x80, 0x2a, 0x00 };
     const part2 = [_]u8{ 0x80, 0xf9, 0x0c };
-    @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
-    @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
+    load(&uxn, 0x7ffc, &part1);
+    load(&uxn, 0x8000, &part2);
+    // @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
+    // @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
     uxn.runVector(0x8000);
     try expectStacks(&uxn, &.{0x2a}, &.{});
 }
 
 test "load with relative addressing wraps correctly around the midpoint of memory" {
-    var uxn = Uxn{};
+    var ram: [page_size]u8 = @splat(0);
+    var uxn = Uxn.init(&ram);
     const part1 = [_]u8{ 0x80, 0x01, 0x12 };
     const part2 = [_]u8{0x2a};
-    @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
-    @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
+    load(&uxn, 0x7ffc, &part1);
+    load(&uxn, 0x8000, &part2);
+    // @memcpy(uxn.mem[0x7ffc..][0..part1.len], &part1);
+    // @memcpy(uxn.mem[0x8000..][0..part2.len], &part2);
     uxn.runVector(0x7ffc);
     try expectStacks(&uxn, &.{0x2a}, &.{});
 }
